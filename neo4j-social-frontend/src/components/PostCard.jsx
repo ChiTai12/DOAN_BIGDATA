@@ -4,6 +4,7 @@ import api from "../services/api";
 
 function PostCard({ post, author, onDelete }) {
   const [liked, setLiked] = useState(false);
+  const [likesCount, setLikesCount] = useState(post?.likesCount || 0);
   const [isDeleting, setIsDeleting] = useState(false);
   const { user } = useAuth();
 
@@ -11,10 +12,30 @@ function PostCard({ post, author, onDelete }) {
   useEffect(() => {
     // For now, assume not liked initially. In a real app, you'd check with the server
     // or pass this info from the Feed component
-    setLiked(false);
-  }, [post.id]);
+    // attempt to infer liked from post.liked (if backend provides) or default false
+    setLiked(Boolean(post?.liked));
+    setLikesCount(post?.likesCount || 0);
+  }, [post.id, post?.liked, post?.likesCount]);
 
-  const formatTime = (timestamp) => {
+  // Listen for real-time post updates
+  useEffect(() => {
+    function onPostUpdate(e) {
+      const payload = e.detail;
+      if (payload?.postId === post.id) {
+        setLikesCount(payload.likesCount);
+        // If this update is from the current user, update liked state
+        if (payload.fromUserId === user?.id) {
+          setLiked(payload.liked);
+        }
+        console.log(`🔄 PostCard updated post ${post.id} - liked: ${payload.liked}, count: ${payload.likesCount}`);
+      }
+    }
+
+    window.addEventListener('app:post:likes:update', onPostUpdate);
+    return () => {
+      window.removeEventListener('app:post:likes:update', onPostUpdate);
+    };
+  }, [post.id, user?.id]);  const formatTime = (timestamp) => {
     // Neo4j may return an Integer-like object. Safely convert to number.
     let ts = timestamp;
     if (ts && typeof ts === "object" && typeof ts.toNumber === "function") {
@@ -49,12 +70,21 @@ function PostCard({ post, author, onDelete }) {
   };
 
   const handleLike = async () => {
+    console.log(`🔥 HandleLike called for post ${post.id}`);
     try {
+      console.log(`📤 Sending like request to /posts/${post.id}/like`);
       const response = await api.post(`/posts/${post.id}/like`);
+      console.log("✅ Like response received:", response.data);
       setLiked(response.data.liked);
-      console.log("Like response:", response.data);
+      
+      if (response.data.liked) {
+        console.log(`❤️ Post ${post.id} is now liked`);
+      } else {
+        console.log(`💔 Post ${post.id} is now unliked`);
+      }
     } catch (error) {
       console.error("❌ Lỗi like bài viết:", error);
+      console.error("❌ Error details:", error.response?.data || error.message);
     }
   };
 
@@ -165,6 +195,7 @@ function PostCard({ post, author, onDelete }) {
               </svg>
             )}
           </button>
+            <div className="text-sm text-gray-600">{likesCount} lượt thích</div>
           <button className="text-gray-700 hover:opacity-70 transition-opacity">
             <svg
               width="24"

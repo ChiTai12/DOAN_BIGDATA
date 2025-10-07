@@ -35,8 +35,8 @@ function Header() {
   }, []);
 
   useEffect(() => {
-    // Setup socket for notifications when user logs in
-    if (!user) return;
+  // Setup socket for notifications when user logs in
+  if (!user) return;
     const token = localStorage.getItem("token");
     try {
       const socket = ioClient(SOCKET_URL, { auth: { token } });
@@ -44,17 +44,70 @@ function Header() {
       socket.on("connect", () => console.log("Header socket connected", socket.id));
       socket.on("notification:new", (payload) => {
         console.log("Header received notification:new", payload);
-        setNotifCount((c) => c + 1);
-        // Add to notifications list
-        setNotifications((prev) => [{
-          id: Date.now(),
-          type: payload.type,
-          message: payload.message,
-          from: payload.from,
-          postId: payload.postId,
-          timestamp: payload.timestamp || Date.now(),
-          read: false
-        }, ...prev]);
+        // Remove any existing notifications from the same user for the same post (dedupe)
+        // Be permissive: older notifications may not have fromUserId stored, so treat them as matches too.
+        setNotifications((prev) => {
+          const matches = (n) => n.postId === payload.postId && (payload.fromUserId ? (n.fromUserId === payload.fromUserId || !n.fromUserId) : true);
+          const removed = prev.filter(matches);
+          const remaining = prev.filter(n => !matches(n));
+          // Count how many removed were unread so we can avoid double-counting the badge
+          const removedUnread = removed.filter(n => !n.read).length;
+          // Update badge: add 1 for the incoming notification, subtract removed unread ones
+          setNotifCount((c) => Math.max(0, c - removedUnread + 1));
+
+          // Prepend the fresh notification
+          return [{
+            id: Date.now(),
+            type: payload.type,
+            message: payload.message,
+            from: payload.from,
+            fromUserId: payload.fromUserId,
+            postId: payload.postId,
+            timestamp: payload.timestamp || Date.now(),
+            read: false
+          }, ...remaining];
+        });
+        // Broadcast a global event so other components (Feed/PostCard) can update immediately
+        try {
+          window.dispatchEvent(new CustomEvent('app:notification:new', { detail: payload }));
+        } catch (e) {
+          console.warn('Failed to dispatch app:notification:new', e);
+        }
+      });
+      // Handle removal of a previously emitted notification (e.g. unlike)
+      socket.on('notification:remove', (payload) => {
+        console.log('Header received notification:remove', payload);
+        setNotifications((prev) => {
+          if (!prev || prev.length === 0) return prev;
+          // If backend provided notifIds, remove exactly those
+          if (payload?.notifIds && Array.isArray(payload.notifIds) && payload.notifIds.length > 0) {
+            const toRemove = prev.filter(n => payload.notifIds.includes(n.id));
+            setNotifCount((c) => Math.max(0, c - toRemove.filter(n => !n.read).length));
+            return prev.filter(n => !payload.notifIds.includes(n.id));
+          }
+          // Fallback to matching by postId/fromUserId (permissive)
+          const matches = (n) => n.postId === payload.postId && (payload.fromUserId ? (n.fromUserId === payload.fromUserId || !n.fromUserId) : true);
+          const toRemove = prev.filter(matches);
+          if (toRemove.length === 0) return prev;
+          setNotifCount((c) => Math.max(0, c - toRemove.filter(n => !n.read).length));
+          return prev.filter(n => !matches(n));
+        });
+        // Also notify other components so they can update likesCount/live UI
+        try {
+          window.dispatchEvent(new CustomEvent('app:notification:remove', { detail: payload }));
+        } catch (e) {
+          console.warn('Failed to dispatch app:notification:remove', e);
+        }
+      });
+
+      // Listen for post likes updates for real-time feed updates
+      socket.on('post:likes:update', (payload) => {
+        console.log('Header received post:likes:update', payload);
+        try {
+          window.dispatchEvent(new CustomEvent('app:post:likes:update', { detail: payload }));
+        } catch (e) {
+          console.warn('Failed to dispatch app:post:likes:update', e);
+        }
       });
     } catch (err) {
       console.error("Header socket init failed", err);
@@ -67,6 +120,38 @@ function Header() {
     };
   }, [user]);
 
+  // Fetch persisted notifications when user logs in
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const res = await fetch(`${SOCKET_URL.replace(/:\/\/.+$/, 'http://localhost:5000')}/notifications`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          // map to our notification shape
+          setNotifications(data.map(n => ({
+            id: n.id || Date.now(),
+            type: n.type,
+            message: n.message,
+            from: n.from || 'Someone',
+            fromUserId: n.fromUserId,
+            postId: n.postId,
+            timestamp: n.createdAt || Date.now(),
+            read: false
+          })));
+          // badge count = number of unread (we treat all as unread initially)
+          setNotifCount(data.length);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch persisted notifications', err);
+      }
+    })();
+  }, [user]);
+
   const handleUpdateProfile = () => {
     setMenuOpen(false);
     setShowUpdateProfile(true);
@@ -77,21 +162,7 @@ function Header() {
     setShowChangePassword(true);
   };
 
-  // Test function to simulate notification
-  const testNotification = () => {
-    console.log("🧪 Testing notification manually");
-    setNotifCount((c) => c + 1);
-    // Add test notification
-    setNotifications((prev) => [{
-      id: Date.now(),
-      type: 'like',
-      message: 'GOAT đã thích bài viết của bạn',
-      from: 'GOAT',
-      postId: 'test-post-123',
-      timestamp: Date.now(),
-      read: false
-    }, ...prev]);
-  };
+  
 
   const handleNotificationClick = () => {
     setShowNotifications(!showNotifications);
@@ -230,15 +301,7 @@ function Header() {
                         </div>
                       )}
                       
-                      {/* Test Button - Remove this in production */}
-                      <div className="px-4 py-2 border-t border-gray-100">
-                        <button
-                          onClick={testNotification}
-                          className="text-xs text-blue-500 hover:text-blue-600"
-                        >
-                          🧪 Test notification
-                        </button>
-                      </div>
+                      {/* end notifications list */}
                     </div>
                   )}
                 </div>

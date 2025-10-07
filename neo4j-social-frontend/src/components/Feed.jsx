@@ -13,6 +13,57 @@ function Feed() {
     fetchPosts();
   }, [user, updateTrigger]); // Re-fetch when user or updateTrigger changes
 
+  useEffect(() => {
+    // Listen for notification events to update posts immediately
+    function onNew(e) {
+      const payload = e.detail;
+      // If it's a like for a post, increase likesCount
+      if (payload?.postId) {
+        setPosts((prev) => prev.map(item => {
+          if (item.post.id === payload.postId) {
+            return { ...item, post: { ...item.post, likesCount: (item.post.likesCount || 0) + 1 } };
+          }
+          return item;
+        }));
+      }
+    }
+
+    function onRemove(e) {
+      const payload = e.detail;
+      if (payload?.postId) {
+        setPosts((prev) => prev.map(item => {
+          if (item.post.id === payload.postId) {
+            return { ...item, post: { ...item.post, likesCount: Math.max(0, (item.post.likesCount || 0) - 1) } };
+          }
+          return item;
+        }));
+      }
+    }
+
+    // Listen for direct post updates (more reliable than notification events)
+    function onPostLikesUpdate(e) {
+      const payload = e.detail;
+      if (payload?.postId) {
+        setPosts((prev) => prev.map(item => {
+          if (item.post.id === payload.postId) {
+            return { ...item, post: { ...item.post, likesCount: payload.likesCount } };
+          }
+          return item;
+        }));
+        console.log(`🔄 Updated post ${payload.postId} likesCount to ${payload.likesCount}`);
+      }
+    }
+
+    window.addEventListener('app:notification:new', onNew);
+    window.addEventListener('app:notification:remove', onRemove);
+    window.addEventListener('app:post:likes:update', onPostLikesUpdate);
+    return () => {
+      window.removeEventListener('app:notification:new', onNew);
+      window.removeEventListener('app:notification:remove', onRemove);
+      window.removeEventListener('app:post:likes:update', onPostLikesUpdate);
+    };
+  }, []);
+
   const fetchPosts = async () => {
     try {
       const response = await api.get("/posts/feed");

@@ -6,6 +6,7 @@ import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
 import postRoutes from "./routes/posts.js";
 import messageRoutes from "./routes/messages.js";
+import notificationRoutes from "./routes/notifications.js";
 import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import jwt from "jsonwebtoken";
@@ -30,6 +31,7 @@ app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
 app.use("/posts", postRoutes);
 app.use("/messages", messageRoutes);
+app.use("/notifications", notificationRoutes);
 
 app.get("/", (req, res) => res.send("✅ Neo4j social backend running"));
 
