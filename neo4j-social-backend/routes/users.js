@@ -65,6 +65,82 @@ router.get("/suggestions", async (req, res) => {
   }
 });
 
+// Get list of user ids that the current user is following
+router.get("/following", verifyToken, async (req, res) => {
+  const session = driver.session();
+  try {
+    const result = await session.run(
+      `MATCH (u:User {id:$id})-[:FOLLOWS]->(f:User) RETURN f.id AS id`,
+      { id: req.userId }
+    );
+    const ids = result.records.map((r) => r.get("id"));
+    res.json({ following: ids });
+  } catch (error) {
+    console.error("Failed to fetch following list", error);
+    res.status(500).json({ error: "Failed to fetch following list" });
+  } finally {
+    await session.close();
+  }
+});
+
+// Get list of user ids that follow the current user
+router.get("/followers", verifyToken, async (req, res) => {
+  const session = driver.session();
+  try {
+    const result = await session.run(
+      `MATCH (f:User)-[:FOLLOWS]->(u:User {id:$id}) RETURN f.id AS id`,
+      { id: req.userId }
+    );
+    const ids = result.records.map((r) => r.get("id"));
+    res.json({ followers: ids });
+  } catch (error) {
+    console.error("Failed to fetch followers list", error);
+    res.status(500).json({ error: "Failed to fetch followers list" });
+  } finally {
+    await session.close();
+  }
+});
+
+// Get full profile objects for both following and followers (for Connections UI)
+router.get("/connections", verifyToken, async (req, res) => {
+  const session = driver.session();
+  try {
+    // Users the current user is following
+    const followingResult = await session.run(
+      `MATCH (u:User {id:$id})-[:FOLLOWS]->(f:User) RETURN f ORDER BY f.username`,
+      { id: req.userId }
+    );
+
+    const following = followingResult.records.map((r) => {
+      const user = r.get("f").properties;
+      // Remove sensitive/internal fields
+      delete user.passwordHash;
+      delete user.password;
+      return user;
+    });
+
+    // Users who follow the current user
+    const followersResult = await session.run(
+      `MATCH (f:User)-[:FOLLOWS]->(u:User {id:$id}) RETURN f ORDER BY f.username`,
+      { id: req.userId }
+    );
+
+    const followers = followersResult.records.map((r) => {
+      const user = r.get("f").properties;
+      delete user.passwordHash;
+      delete user.password;
+      return user;
+    });
+
+    res.json({ following, followers });
+  } catch (error) {
+    console.error("Failed to fetch connections", error);
+    res.status(500).json({ error: "Failed to fetch connections" });
+  } finally {
+    await session.close();
+  }
+});
+
 // Lấy thông tin người dùng
 router.get("/:id", async (req, res) => {
   const session = driver.session();
@@ -287,6 +363,56 @@ router.post("/follow/:userId", verifyToken, async (req, res) => {
       `,
       { followerId: req.userId, followingId: req.params.userId }
     );
+    // emit socket events to notify both parties (if socket is configured)
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      if (io) {
+        // notify the followed user that they have a new follower
+        io.to(req.params.userId).emit("user:follow", {
+          followerId: req.userId,
+          followingId: req.params.userId,
+        });
+        // also send a full connections update for the followed user so their UI
+        // can update immediately without having to re-query
+        try {
+          const conRes1 = await session.run(
+            `MATCH (u:User {id:$id})-[:FOLLOWS]->(f:User) RETURN f ORDER BY f.username`,
+            { id: req.params.userId }
+          );
+          const followingList = conRes1.records.map((r) => {
+            const userObj = r.get("f").properties;
+            delete userObj.passwordHash;
+            delete userObj.password;
+            return userObj;
+          });
+          const conRes2 = await session.run(
+            `MATCH (f:User)-[:FOLLOWS]->(u:User {id:$id}) RETURN f ORDER BY f.username`,
+            { id: req.params.userId }
+          );
+          const followersList = conRes2.records.map((r) => {
+            const userObj = r.get("f").properties;
+            delete userObj.passwordHash;
+            delete userObj.password;
+            return userObj;
+          });
+          io.to(req.params.userId).emit("connections:update", {
+            targetId: req.params.userId,
+            following: followingList,
+            followers: followersList,
+          });
+        } catch (qErr) {
+          console.warn("Failed to build connections payload for follow", qErr);
+        }
+        // notify the actor that their following list changed
+        io.to(req.userId).emit("user:follow:ack", {
+          followerId: req.userId,
+          followingId: req.params.userId,
+        });
+      }
+    } catch (emitErr) {
+      console.warn("Failed to emit follow socket event", emitErr);
+    }
+
     res.json({ message: "User followed successfully" });
   } catch (error) {
     res.status(500).json({ error: "Failed to follow user" });
@@ -306,7 +432,158 @@ router.delete("/follow/:userId", verifyToken, async (req, res) => {
       `,
       { followerId: req.userId, followingId: req.params.userId }
     );
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      if (io) {
+        // notify the user who was unfollowed
+        io.to(req.params.userId).emit("user:unfollow", {
+          followerId: req.userId,
+          followingId: req.params.userId,
+        });
+        // also send full connections update for the user who was unfollowed
+        try {
+          const conRes1 = await session.run(
+            `MATCH (u:User {id:$id})-[:FOLLOWS]->(f:User) RETURN f ORDER BY f.username`,
+            { id: req.params.userId }
+          );
+          const followingList = conRes1.records.map((r) => {
+            const userObj = r.get("f").properties;
+            delete userObj.passwordHash;
+            delete userObj.password;
+            return userObj;
+          });
+          const conRes2 = await session.run(
+            `MATCH (f:User)-[:FOLLOWS]->(u:User {id:$id}) RETURN f ORDER BY f.username`,
+            { id: req.params.userId }
+          );
+          const followersList = conRes2.records.map((r) => {
+            const userObj = r.get("f").properties;
+            delete userObj.passwordHash;
+            delete userObj.password;
+            return userObj;
+          });
+          io.to(req.params.userId).emit("connections:update", {
+            targetId: req.params.userId,
+            following: followingList,
+            followers: followersList,
+          });
+        } catch (qErr) {
+          console.warn(
+            "Failed to build connections payload for unfollow",
+            qErr
+          );
+        }
+        // notify the actor that their following list changed
+        io.to(req.userId).emit("user:unfollow:ack", {
+          followerId: req.userId,
+          followingId: req.params.userId,
+        });
+      }
+    } catch (emitErr) {
+      console.warn("Failed to emit unfollow socket event", emitErr);
+    }
+
     res.json({ message: "User unfollowed successfully" });
+  } finally {
+    await session.close();
+  }
+});
+
+// Remove a follower (delete relation from :userId -> current user)
+router.delete("/remove-follower/:userId", verifyToken, async (req, res) => {
+  const session = driver.session();
+  try {
+    await session.run(
+      `MATCH (a:User {id:$followerId})-[r:FOLLOWS]->(b:User {id:$currentId}) DELETE r`,
+      { followerId: req.params.userId, currentId: req.userId }
+    );
+
+    // emit events to notify both parties and provide updated connections
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      if (io) {
+        // notify the removed follower that they were unfollowed (they no longer follow current user)
+        io.to(req.params.userId).emit("user:unfollow", {
+          followerId: req.params.userId,
+          followingId: req.userId,
+        });
+
+        // send connections update to the removed follower
+        try {
+          const conResA = await session.run(
+            `MATCH (u:User {id:$id})-[:FOLLOWS]->(f:User) RETURN f ORDER BY f.username`,
+            { id: req.params.userId }
+          );
+          const followingListA = conResA.records.map((r) => {
+            const userObj = r.get("f").properties;
+            delete userObj.passwordHash;
+            delete userObj.password;
+            return userObj;
+          });
+          const conResB = await session.run(
+            `MATCH (f:User)-[:FOLLOWS]->(u:User {id:$id}) RETURN f ORDER BY f.username`,
+            { id: req.params.userId }
+          );
+          const followersListA = conResB.records.map((r) => {
+            const userObj = r.get("f").properties;
+            delete userObj.passwordHash;
+            delete userObj.password;
+            return userObj;
+          });
+          io.to(req.params.userId).emit("connections:update", {
+            targetId: req.params.userId,
+            following: followingListA,
+            followers: followersListA,
+          });
+        } catch (qErr) {
+          console.warn(
+            "Failed to build connections payload for removed follower",
+            qErr
+          );
+        }
+
+        // send connections update to current user as well
+        try {
+          const conRes1 = await session.run(
+            `MATCH (u:User {id:$id})-[:FOLLOWS]->(f:User) RETURN f ORDER BY f.username`,
+            { id: req.userId }
+          );
+          const followingList = conRes1.records.map((r) => {
+            const userObj = r.get("f").properties;
+            delete userObj.passwordHash;
+            delete userObj.password;
+            return userObj;
+          });
+          const conRes2 = await session.run(
+            `MATCH (f:User)-[:FOLLOWS]->(u:User {id:$id}) RETURN f ORDER BY f.username`,
+            { id: req.userId }
+          );
+          const followersList = conRes2.records.map((r) => {
+            const userObj = r.get("f").properties;
+            delete userObj.passwordHash;
+            delete userObj.password;
+            return userObj;
+          });
+          io.to(req.userId).emit("connections:update", {
+            targetId: req.userId,
+            following: followingList,
+            followers: followersList,
+          });
+        } catch (qErr) {
+          console.warn(
+            "Failed to build connections payload for current user after removing follower",
+            qErr
+          );
+        }
+      }
+    } catch (emitErr) {
+      console.warn("Failed to emit remove-follower socket event", emitErr);
+    }
+
+    res.json({ message: "Follower removed successfully" });
+  } catch (error) {
+    console.error("Failed to remove follower", error);
+    res.status(500).json({ error: "Failed to remove follower" });
   } finally {
     await session.close();
   }

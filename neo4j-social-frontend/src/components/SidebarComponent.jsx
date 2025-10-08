@@ -8,52 +8,122 @@ const SidebarComponent = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [following, setFollowing] = useState(new Set());
+  const [hovered, setHovered] = useState(null);
+  // fetch suggestions (exposed so events can trigger refresh)
+  const fetchSuggestions = async (signal) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.get("/users/suggestions");
+      const list = Array.isArray(res.data) ? res.data : [];
+      // Remove current user from suggestions
+      const filtered = list.filter((s) => {
+        if (!s) return false;
+        if (user?.id && s.id && s.id === user.id) return false;
+        if (user?.username && s.username && s.username === user.username)
+          return false;
+        return true;
+      });
+      if (!signal?.aborted) setSuggestions(filtered);
+    } catch (err) {
+      console.error("Failed to load suggestions", err);
+      if (!signal?.aborted) setError("Không thể tải gợi ý");
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  };
+
+  const fetchFollowing = async (signal) => {
+    try {
+      const res = await api.get("/users/following");
+      if (!signal?.aborted && res.data && Array.isArray(res.data.following)) {
+        setFollowing(new Set(res.data.following));
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
-    const fetchSuggestions = async () => {
-      setLoading(true);
-      setError(null);
+    const controller = { aborted: false };
+    fetchSuggestions(controller);
+    fetchFollowing(controller);
+
+    // Listen for follow/unfollow events. Only update local following Set when
+    // the current user is the actor (payload.followerId === user.id). This
+    // prevents reloading the entire sidebar when unrelated users follow/unfollow.
+    const onFollow = (e) => {
       try {
-        const res = await api.get("/users/suggestions");
-        if (!cancelled) {
-          const list = Array.isArray(res.data) ? res.data : [];
-          // Remove current user from suggestions
-          const filtered = list.filter((s) => {
-            if (!s) return false;
-            if (user?.id && s.id && s.id === user.id) return false;
-            if (user?.username && s.username && s.username === user.username)
-              return false;
-            return true;
+        const payload = e.detail || {};
+        if (payload.followerId && payload.followerId === user?.id) {
+          setFollowing((prev) => {
+            const s = new Set(prev);
+            if (payload.followingId) s.add(payload.followingId);
+            return s;
           });
-          setSuggestions(filtered);
         }
       } catch (err) {
-        console.error("Failed to load suggestions", err);
-        if (!cancelled) setError("Không thể tải gợi ý");
-      } finally {
-        if (!cancelled) setLoading(false);
+        console.warn("Sidebar failed to process app:user:follow", err);
       }
     };
 
-    fetchSuggestions();
+    const onUnfollow = (e) => {
+      try {
+        const payload = e.detail || {};
+        if (payload.followerId && payload.followerId === user?.id) {
+          setFollowing((prev) => {
+            const s = new Set(prev);
+            if (payload.followingId) s.delete(payload.followingId);
+            return s;
+          });
+        }
+      } catch (err) {
+        console.warn("Sidebar failed to process app:user:unfollow", err);
+      }
+    };
+
+    window.addEventListener("app:user:follow", onFollow);
+    window.addEventListener("app:user:unfollow", onUnfollow);
     return () => {
       cancelled = true;
+      controller.aborted = true;
+      window.removeEventListener("app:user:follow", onFollow);
+      window.removeEventListener("app:user:unfollow", onUnfollow);
     };
   }, [user?.id, updateTrigger]); // Re-fetch when updateTrigger changes
 
   const handleFollow = async (userId) => {
-    if (following.has(userId)) return;
-    // Optimistic UI
-    setFollowing((prev) => new Set(prev).add(userId));
+    // toggle follow/unfollow
+    const isFollowing = following.has(userId);
+    // optimistic
+    setFollowing((prev) => {
+      const s = new Set(prev);
+      if (isFollowing) s.delete(userId);
+      else s.add(userId);
+      return s;
+    });
     try {
-      await api.post(`/users/follow/${userId}`);
+      if (isFollowing) {
+        await api.delete(`/users/follow/${userId}`);
+      } else {
+        await api.post(`/users/follow/${userId}`);
+      }
+      // dispatch local event so other components in the same tab update immediately
+      try {
+        const payload = { followerId: user?.id, followingId: userId };
+        const evtName = isFollowing ? "app:user:unfollow" : "app:user:follow";
+        window.dispatchEvent(new CustomEvent(evtName, { detail: payload }));
+      } catch (e) {
+        // ignore
+      }
     } catch (err) {
-      console.error("Follow failed", err);
+      console.error("Follow toggle failed", err);
       // rollback
       setFollowing((prev) => {
         const s = new Set(prev);
-        s.delete(userId);
+        if (isFollowing) s.add(userId);
+        else s.delete(userId);
         return s;
       });
     }
@@ -81,10 +151,10 @@ const SidebarComponent = () => {
             <img
               src={`http://localhost:5000${user.avatarUrl}`}
               alt="Avatar"
-              className="w-16 h-16 rounded-full object-cover"
+              className="w-16 h-16 rounded-full object-cover shadow-avatar"
             />
           ) : (
-            <div className="w-16 h-16 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full flex items-center justify-center text-white font-bold text-lg">
+            <div className="w-16 h-16 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-avatar">
               {(user?.displayName?.[0] || user?.username?.[0])?.toUpperCase() ||
                 "U"}
             </div>
@@ -114,49 +184,60 @@ const SidebarComponent = () => {
                 No suggestions available.
               </div>
             ) : (
-              suggestions.map((suggestion) => (
-                <div
-                  key={suggestion.id || suggestion.username}
-                  className="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-lg transition-colors"
-                >
-                  {suggestion?.avatarUrl ? (
-                    <img
-                      src={`http://localhost:5000${suggestion.avatarUrl}`}
-                      alt={suggestion.displayName || suggestion.username}
-                      className="w-12 h-12 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold">
-                      {suggestion.displayName?.[0]?.toUpperCase()}
-                    </div>
-                  )}
-                  <div className="flex-1">
-                    <div className="font-semibold text-gray-900">
-                      {suggestion.displayName || suggestion.username}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      @{suggestion.username}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() =>
-                      handleFollow(suggestion.id || suggestion.username)
-                    }
-                    disabled={following.has(
-                      suggestion.id || suggestion.username
-                    )}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      following.has(suggestion.id || suggestion.username)
-                        ? "bg-gray-300 text-gray-700 cursor-not-allowed"
-                        : "bg-blue-500 text-white hover:bg-blue-600"
-                    }`}
+              // Only show suggestions that the user is NOT already following
+              suggestions
+                .filter((s) => {
+                  const key = s.id || s.username;
+                  return !following.has(key);
+                })
+                .map((suggestion) => (
+                  <div
+                    key={suggestion.id || suggestion.username}
+                    className="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-lg transition-colors"
                   >
-                    {following.has(suggestion.id || suggestion.username)
-                      ? "Following"
-                      : "Follow"}
-                  </button>
-                </div>
-              ))
+                    {suggestion?.avatarUrl ? (
+                      <img
+                        src={`http://localhost:5000${suggestion.avatarUrl}`}
+                        alt={suggestion.displayName || suggestion.username}
+                        className="w-12 h-12 rounded-full object-cover shadow-avatar"
+                      />
+                    ) : (
+                      <div className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold shadow-avatar">
+                        {suggestion.displayName?.[0]?.toUpperCase()}
+                      </div>
+                    )}
+                    <div className="flex-1">
+                      <div className="font-semibold text-gray-900">
+                        {suggestion.displayName || suggestion.username}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        @{suggestion.username}
+                      </div>
+                    </div>
+                    {(() => {
+                      const key = suggestion.id || suggestion.username;
+                      const isFollowing = following.has(key);
+                      return (
+                        <button
+                          onClick={() => handleFollow(key)}
+                          onMouseEnter={() => setHovered(key)}
+                          onMouseLeave={() => setHovered(null)}
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ease-in-out transform ${
+                            isFollowing
+                              ? "bg-gray-200 text-gray-800 hover:bg-red-500 hover:text-white hover:scale-105"
+                              : "bg-blue-500 text-white hover:bg-blue-600"
+                          }`}
+                        >
+                          {isFollowing
+                            ? hovered === key
+                              ? "Unfollow"
+                              : "Following"
+                            : "Follow"}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                ))
             )}
           </div>
         )}

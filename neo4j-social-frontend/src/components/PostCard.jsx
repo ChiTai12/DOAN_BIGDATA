@@ -4,15 +4,31 @@ import api from "../services/api";
 
 function PostCard({ post, author, onDelete }) {
   const [liked, setLiked] = useState(false);
+  const [likesCount, setLikesCount] = useState(post.likesCount || 0);
   const [isDeleting, setIsDeleting] = useState(false);
   const { user } = useAuth();
 
   // Check if current user has liked this post (optional: could be passed from parent)
   useEffect(() => {
-    // For now, assume not liked initially. In a real app, you'd check with the server
-    // or pass this info from the Feed component
-    setLiked(false);
-  }, [post.id]);
+    // Initialize liked state from server-provided flag when available
+    setLiked(Boolean(post.liked));
+    setLikesCount(post.likesCount || 0);
+  }, [post.id, post.liked]);
+
+  useEffect(() => {
+    function onPostLikesUpdate(e) {
+      const payload = e.detail || e;
+      if (!payload || payload.postId !== post.id) return;
+      // update likes count and liked state if the update is from current user
+      setLikesCount(payload.likesCount ?? ((c) => c));
+      if (payload.fromUserId === (user && user.id)) {
+        setLiked(Boolean(payload.liked));
+      }
+    }
+    window.addEventListener("app:post:likes:update", onPostLikesUpdate);
+    return () =>
+      window.removeEventListener("app:post:likes:update", onPostLikesUpdate);
+  }, [post.id, user]);
 
   const formatTime = (timestamp) => {
     // Neo4j may return an Integer-like object. Safely convert to number.
@@ -69,7 +85,7 @@ function PostCard({ post, author, onDelete }) {
           <img
             src={`http://localhost:5000${author.avatarUrl}`}
             alt={author?.displayName || author?.username}
-            className="w-8 h-8 rounded-full object-cover"
+            className="w-8 h-8 rounded-full object-cover shadow-avatar"
             onError={(e) => {
               // If image fails to load, hide it so fallback initial shows
               e.target.style.display = "none";
@@ -77,8 +93,12 @@ function PostCard({ post, author, onDelete }) {
             }}
           />
         ) : (
-          <div className="w-8 h-8 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full flex items-center justify-center text-white font-bold text-sm">
-            {(author?.displayName?.[0] || author?.username?.[0] || "U").toUpperCase()}
+          <div className="w-8 h-8 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-avatar">
+            {(
+              author?.displayName?.[0] ||
+              author?.username?.[0] ||
+              "U"
+            ).toUpperCase()}
           </div>
         )}
         <div className="flex-1">
@@ -165,6 +185,7 @@ function PostCard({ post, author, onDelete }) {
               </svg>
             )}
           </button>
+          <div className="text-sm text-gray-700">{likesCount} lượt thích</div>
           <button className="text-gray-700 hover:opacity-70 transition-opacity">
             <svg
               width="24"
@@ -196,7 +217,9 @@ function PostCard({ post, author, onDelete }) {
         {/* Post content */}
         {post?.content && (
           <div className="text-sm text-gray-900 leading-relaxed">
-            <span className="font-semibold">{author?.displayName || author?.username}</span>{" "}
+            <span className="font-semibold">
+              {author?.displayName || author?.username}
+            </span>{" "}
             {post.content}
           </div>
         )}

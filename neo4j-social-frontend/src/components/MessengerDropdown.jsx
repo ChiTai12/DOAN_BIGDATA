@@ -60,12 +60,12 @@ function MessengerDropdown({ isOpen, onClose, onStartChat }) {
         <img
           src={userData.avatar}
           alt={userData.username}
-          className="w-10 h-10 rounded-full object-cover"
+          className="w-10 h-10 rounded-full object-cover shadow-avatar"
         />
       );
     }
     return (
-      <div className="w-10 h-10 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold text-sm">
+      <div className="w-10 h-10 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-avatar">
         {userData.username?.[0]?.toUpperCase() || "U"}
       </div>
     );

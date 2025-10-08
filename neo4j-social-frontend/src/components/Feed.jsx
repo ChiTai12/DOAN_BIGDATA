@@ -11,12 +11,22 @@ function Feed() {
 
   useEffect(() => {
     fetchPosts();
+
+    const onNavigateHome = () => {
+      // refresh posts when Home is clicked (user is already on home page)
+      fetchPosts();
+    };
+    window.addEventListener("app:navigate:home", onNavigateHome);
+    // ensure initial app launch also triggers the same behavior
+    window.dispatchEvent(new CustomEvent("app:navigate:home"));
+    return () =>
+      window.removeEventListener("app:navigate:home", onNavigateHome);
   }, [user, updateTrigger]); // Re-fetch when user or updateTrigger changes
 
   const fetchPosts = async () => {
     try {
       const response = await api.get("/posts/feed");
-  console.debug("fetchPosts: server response:", response.data);
+      console.debug("fetchPosts: server response:", response.data);
       setPosts(response.data);
     } catch (error) {
       console.error("Error fetching posts:", error);
@@ -54,7 +64,7 @@ function Feed() {
   }
 
   return (
-    <div className="w-full">
+    <div id="home-feed" className="w-full">
       {user && <CreatePost onPostCreated={handleNewPost} />}
 
       <div className="space-y-6">

@@ -19,8 +19,31 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      // remove token so subsequent requests don't include it
       localStorage.removeItem("token");
-      window.location.reload();
+      // Avoid forcing an unconditional reload which can cause a reload loop
+      // if localStorage was cleared manually. Use a session-scoped flag so we
+      // only reload once per session when receiving an auth error.
+      try {
+        const reloaded = sessionStorage.getItem("auth_reloaded");
+        if (!reloaded) {
+          sessionStorage.setItem("auth_reloaded", "1");
+          // small timeout to allow any pending UI updates to flush
+          setTimeout(() => window.location.reload(), 50);
+        } else {
+          // already attempted reload this session — do nothing to avoid loop
+          console.warn(
+            "401 received but reload already attempted this session"
+          );
+        }
+      } catch (e) {
+        // If sessionStorage isn't available, fall back to a single reload attempt
+        try {
+          window.location.reload();
+        } catch (err) {
+          console.error("Failed to reload after 401", err);
+        }
+      }
     }
     return Promise.reject(error);
   }
