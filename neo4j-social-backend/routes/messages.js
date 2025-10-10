@@ -1,6 +1,7 @@
 import express from "express";
 import driver from "../db/driver.js";
 import { verifyToken } from "../middleware/auth.js";
+import emojiRegex from "emoji-regex";
 
 const router = express.Router();
 
@@ -39,6 +40,31 @@ router.post("/send", verifyToken, async (req, res) => {
   );
 
   const { toUserId, text } = req.body;
+  // Always extract first emoji from text to store as separate icon field
+  let icon = "";
+  if (text && typeof text === "string") {
+    try {
+      const re = emojiRegex();
+      const match = re.exec(text);
+      if (match && match[0]) icon = match[0];
+    } catch (e) {
+      // ignore extraction errors
+    }
+  }
+  // Debug: log extraction outcome to help diagnose missing icon issues
+  try {
+    const re2 = emojiRegex();
+    const match2 = text && typeof text === "string" ? re2.exec(text) : null;
+    console.log("🪪 message send debug:", {
+      toUserId,
+      text,
+      providedIcon: req.body.icon,
+      extractedIcon: icon,
+      match2,
+    });
+  } catch (dbgE) {
+    console.warn("🪪 message debug failed", dbgE);
+  }
   if (!toUserId || !text)
     return res.status(400).json({ error: "toUserId and text required" });
 
@@ -53,17 +79,19 @@ router.post("/send", verifyToken, async (req, res) => {
     const result = await session.run(
       `
       MATCH (c:Conversation {id:$convId})
-      CREATE (m:Message {id: $messageId, text:$text, senderId:$fromId, createdAt: datetime()})
+      CREATE (m:Message {id: $messageId, text:$text, senderId:$fromId, icon:coalesce($icon, ''), createdAt: datetime()})
       CREATE (c)-[:HAS_MESSAGE]->(m)
       SET c.lastUpdated = datetime(), c.lastMessageId = m.id, c.lastMessageText = m.text
       RETURN m, c
       `,
-      { convId, fromId: req.userId, text, messageId }
+      { convId, fromId: req.userId, text, messageId, icon }
     );
 
     const m = result.records[0].get("m").properties;
 
     console.log(`✅ Persisted message ${m.id} in conversation ${convId}`);
+    // Debug: log full persisted message properties to verify icon field
+    console.log("🧾 persisted message properties:", m);
 
     // Emit via Socket.IO if available
     try {

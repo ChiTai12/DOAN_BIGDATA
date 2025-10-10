@@ -10,6 +10,7 @@ import {
   FaBell,
   FaChevronDown,
   FaSearch,
+  FaUsers,
 } from "react-icons/fa";
 import { FiPlus, FiMessageCircle } from "react-icons/fi";
 import { AiOutlineHome, AiOutlinePlusSquare } from "react-icons/ai";
@@ -44,6 +45,10 @@ function Header() {
   }, []);
 
   useEffect(() => {
+    // Keep a reference to the local notification handler in the outer
+    // scope of this effect so cleanup can remove it safely even when
+    // the effect is re-run (e.g. when `user` changes).
+    let onLocalNotif = null;
     // Setup socket for notifications when user logs in
     if (!user) return;
     const token = localStorage.getItem("token");
@@ -53,6 +58,28 @@ function Header() {
       socket.on("connect", () =>
         console.log("Header socket connected", socket.id)
       );
+
+      // forward new post events so Feed can react in real-time
+      socket.on("post:created", (payload) => {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("app:post:created", { detail: payload })
+          );
+        } catch (e) {
+          console.warn("Failed to forward post:created", e);
+        }
+      });
+      // forward post deletions to window so Feed can remove posts in real-time
+      socket.on("post:deleted", (payload) => {
+        try {
+          console.debug("Header socket received post:deleted", payload);
+          window.dispatchEvent(
+            new CustomEvent("app:post:deleted", { detail: payload })
+          );
+        } catch (e) {
+          console.warn("Failed to forward post:deleted", e);
+        }
+      });
       socket.on("notification:new", (payload) => {
         console.log("Header received notification:new", payload);
         const fromName =
@@ -98,6 +125,38 @@ function Header() {
           ];
         });
       });
+
+      // Listen for local notification events dispatched from UI actions
+      onLocalNotif = (e) => {
+        const payload = e.detail || e;
+        if (!payload) return;
+        // Reuse same logic as socket notification:new handler
+        const fromName =
+          payload.fromName || payload.from || payload.fromUserId || "Someone";
+        const notifId =
+          payload.notifId ||
+          payload.id ||
+          `${payload.fromUserId}-${payload.postId}-${Date.now()}`;
+        setNotifications((prev) => {
+          const existsById = prev.some((n) => n.id === notifId);
+          if (existsById) return prev;
+          setNotifCount((c) => c + 1);
+          return [
+            {
+              id: notifId,
+              type: payload.type || "info",
+              message: payload.message,
+              from: fromName,
+              fromUserId: payload.fromUserId,
+              postId: payload.postId,
+              timestamp: payload.timestamp || Date.now(),
+              read: false,
+            },
+            ...prev,
+          ];
+        });
+      };
+      window.addEventListener("app:notification:new", onLocalNotif);
       // forward post likes updates to window so PostCard / Feed can listen
       socket.on("post:likes:update", (payload) => {
         try {
@@ -200,6 +259,23 @@ function Header() {
         } catch (e) {}
       });
 
+      // forward user profile updates (avatar/displayName changes)
+      socket.on("user:updated", (payload) => {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("app:user:updated", { detail: payload })
+          );
+        } catch (e) {
+          console.warn("Failed to forward user:updated", e);
+        }
+        try {
+          // if this client updated their own profile, refresh local user info
+          if (payload && payload.user && payload.user.id === user?.id) {
+            updateUserOnly(payload.user);
+          }
+        } catch (e) {}
+      });
+
       // handle notification removals when someone unlikes
       socket.on("notification:remove", (payload) => {
         try {
@@ -239,6 +315,14 @@ function Header() {
         socketRef.current.disconnect();
         socketRef.current = null;
       }
+      // Remove local notification listener only if it was registered
+      try {
+        if (typeof onLocalNotif === "function") {
+          window.removeEventListener("app:notification:new", onLocalNotif);
+        }
+      } catch (e) {
+        // defensive: ignore any removal errors
+      }
     };
   }, [user]);
 
@@ -254,19 +338,43 @@ function Header() {
         if (!res.ok) return;
         const data = await res.json();
         if (Array.isArray(data)) {
-          setNotifications(
-            data.map((n) => ({
-              id: n.id,
-              type: n.type,
-              message: n.message,
-              from: n.fromName || n.from || "Someone",
-              fromUserId: n.fromUserId,
-              postId: n.postId,
-              timestamp: n.createdAt || Date.now(),
-              read: false,
-            }))
+          // Normalize timestamps (Neo4j Integer) and sort newest-first
+          const normalized = data
+            .map((n) => {
+              let ts = n.createdAt;
+              try {
+                if (
+                  ts &&
+                  typeof ts === "object" &&
+                  typeof ts.toNumber === "function"
+                ) {
+                  ts = ts.toNumber();
+                } else {
+                  ts = Number(ts) || Date.now();
+                }
+              } catch (e) {
+                ts = Date.now();
+              }
+              return {
+                id: n.id,
+                type: n.type,
+                message: n.message,
+                from: n.fromName || n.from || "Someone",
+                fromUserId: n.fromUserId,
+                postId: n.postId,
+                timestamp: ts,
+                read: n.read === true, // respect persisted read flag if present
+              };
+            })
+            .sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
+
+          setNotifications(normalized);
+
+          // Compute unread count from persisted read flags when available, otherwise fall back to total
+          const unread = normalized.filter((n) => !n.read).length;
+          setNotifCount(
+            typeof unread === "number" ? unread : normalized.length
           );
-          setNotifCount(data.length);
         }
       } catch (err) {
         console.warn("Failed to load persisted notifications", err);
@@ -287,11 +395,106 @@ function Header() {
   // ...existing code...
 
   const handleNotificationClick = () => {
-    setShowNotifications(!showNotifications);
-    if (!showNotifications) {
-      // Mark all as read and reset count
+    const willOpen = !showNotifications;
+    setShowNotifications(willOpen);
+    if (willOpen) {
+      // Mark all as read locally first for immediate UI feedback
       setNotifCount(0);
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+
+      // Persist to server and verify success
+      (async () => {
+        try {
+          const token = localStorage.getItem("token");
+          const resp = await fetch(
+            "http://localhost:5000/notifications/mark-read",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({}),
+            }
+          );
+
+          if (!resp.ok) {
+            console.error("Mark-read failed:", resp.status);
+            // Revert local state if server call failed
+            setNotifCount(
+              (prev) => notifications.filter((n) => !n.read).length
+            );
+            setNotifications((prev) =>
+              prev.map((n) => ({ ...n, read: false }))
+            );
+            return;
+          }
+
+          const json = await resp.json();
+          console.log("/notifications/mark-read response:", resp.status, json);
+
+          // Verify server actually updated notifications
+          if (json.updated === 0 && notifications.length > 0) {
+            console.warn(
+              "Server marked 0 notifications as read - may need to reload"
+            );
+            // Force a fresh fetch to sync with server state
+            setTimeout(async () => {
+              try {
+                const freshResp = await fetch(
+                  "http://localhost:5000/notifications",
+                  {
+                    headers: { Authorization: `Bearer ${token}` },
+                  }
+                );
+                if (freshResp.ok) {
+                  const freshData = await freshResp.json();
+                  const freshNormalized = freshData
+                    .map((n) => {
+                      let ts = n.createdAt;
+                      try {
+                        if (
+                          ts &&
+                          typeof ts === "object" &&
+                          typeof ts.toNumber === "function"
+                        ) {
+                          ts = ts.toNumber();
+                        } else {
+                          ts = Number(ts) || Date.now();
+                        }
+                      } catch (e) {
+                        ts = Date.now();
+                      }
+                      return {
+                        id: n.id,
+                        type: n.type,
+                        message: n.message,
+                        from: n.fromName || n.from || "Someone",
+                        fromUserId: n.fromUserId,
+                        postId: n.postId,
+                        timestamp: ts,
+                        read: n.read === true,
+                      };
+                    })
+                    .sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
+
+                  setNotifications(freshNormalized);
+                  const unread = freshNormalized.filter((n) => !n.read).length;
+                  setNotifCount(unread);
+                  console.log("Synced with server - unread count:", unread);
+                }
+              } catch (e) {
+                console.warn("Failed to sync with server after mark-read", e);
+              }
+            }, 500);
+          }
+        } catch (e) {
+          console.warn("Failed to persist notifications read state", e);
+          // Revert local state on error
+          setNotifCount((prev) => notifications.filter((n) => !n.read).length);
+          setNotifications((prev) => prev.map((n) => ({ ...n, read: false })));
+        }
+      })();
     }
   };
 
@@ -321,6 +524,14 @@ function Header() {
     if (user) setIsHomeActive(true);
   }, [user]);
 
+  // When connections modal opens, mark + button active and unset Home
+  useEffect(() => {
+    // If Connections, Chat, or Notifications are open, unset Home; otherwise Home is active
+    if (showConnections || showChat || showNotifications)
+      setIsHomeActive(false);
+    else setIsHomeActive(true);
+  }, [showConnections, showChat, showNotifications]);
+
   const avatarContent = () => {
     if (user?.avatarUrl)
       return (
@@ -340,20 +551,20 @@ function Header() {
   return (
     <>
       <header className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 shadow-sm z-50">
-        <div className="flex max-w-7xl w-full gap-10 mx-auto px-6 items-center justify-between h-16">
+        <div className="flex max-w-7xl w-full gap-10 mx-auto px-6 items-center justify-between h-20">
           {/* Logo */}
           <div className="text-2xl font-bold uppercase bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent font-['Inter',sans-serif] tracking-wide">
             MẠNG XÃ HỘI MINI
           </div>
 
           {/* Search bar */}
-          <div className="flex-1 max-w-md mx-8 relative">
+          <div className="flex-1 max-w-2xl mx-8 relative">
             <div className="relative">
-              <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <FaSearch className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-500 w-5 h-5" />
               <input
                 type="text"
                 placeholder="Tìm kiếm người dùng, bài viết..."
-                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 font-['Inter',sans-serif]"
+                className="w-full pl-12 pr-4 py-3 bg-white border border-gray-300 rounded-xl text-base text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition-all duration-200 font-['Inter',sans-serif] shadow-sm"
               />
             </div>
           </div>
@@ -389,16 +600,28 @@ function Header() {
 
                 <button
                   aria-label="Kết nối"
-                  className="p-3 rounded-xl text-gray-600 hover:text-blue-600 hover:bg-gray-100 transition-all duration-200"
-                  onClick={() => setShowConnections(true)}
+                  className={`p-3 rounded-xl transition-all duration-200 ${
+                    showConnections
+                      ? "bg-blue-100 text-blue-600 shadow-sm"
+                      : "text-gray-600 hover:text-blue-600 hover:bg-gray-100"
+                  }`}
+                  onClick={() => setShowConnections((s) => !s)}
                 >
-                  <FiPlus className="w-5 h-5" />
+                  <FaUsers className="w-5 h-5" />
                 </button>
 
                 <button
-                  onClick={() => setShowChat(true)}
+                  onClick={() => {
+                    // open chat and ensure connections modal is closed
+                    setShowConnections(false);
+                    setShowChat(true);
+                  }}
                   aria-label="Tin nhắn"
-                  className="p-3 rounded-xl text-gray-600 hover:text-blue-600 hover:bg-gray-100 transition-all duration-200"
+                  className={`p-3 rounded-xl transition-all duration-200 ${
+                    showChat
+                      ? "bg-blue-100 text-blue-600 shadow-sm"
+                      : "text-gray-600 hover:text-blue-600 hover:bg-gray-100"
+                  }`}
                 >
                   <FiMessageCircle className="w-5 h-5" />
                 </button>
@@ -406,7 +629,11 @@ function Header() {
                 <div className="relative" ref={notifRef}>
                   <button
                     aria-label="Thông báo"
-                    className="p-3 rounded-xl text-gray-600 hover:text-blue-600 hover:bg-gray-100 transition-all duration-200 relative"
+                    className={`p-3 rounded-xl transition-all duration-200 relative ${
+                      showNotifications
+                        ? "bg-blue-100 text-blue-600 shadow-sm"
+                        : "text-gray-600 hover:text-blue-600 hover:bg-gray-100"
+                    }`}
                     onClick={handleNotificationClick}
                   >
                     <div className="relative">
@@ -437,31 +664,33 @@ function Header() {
                           {notifications.map((notif) => (
                             <div
                               key={notif.id}
-                              className={`px-4 py-3 hover:bg-gray-50 border-b border-gray-50 last:border-b-0 transition-colors ${
-                                !notif.read ? "bg-blue-50" : ""
+                              className={`px-4 py-3 border-b last:border-b-0 transition-colors flex items-start gap-3 ${
+                                !notif.read
+                                  ? "bg-gradient-to-r from-blue-50 to-white border-l-4 border-blue-400"
+                                  : "hover:bg-gray-50"
                               }`}
                             >
-                              <div className="flex items-start gap-3">
-                                <div className="w-10 h-10 bg-gradient-to-r from-pink-400 to-red-400 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0 shadow-sm">
-                                  ❤️
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm text-gray-900 font-['Inter',sans-serif]">
-                                    <span className="font-semibold">
-                                      {notif.from}
-                                    </span>{" "}
-                                    đã thích bài viết của bạn
-                                  </p>
-                                  <p className="text-xs text-gray-500 mt-1 font-['Inter',sans-serif]">
-                                    {new Date(notif.timestamp).toLocaleString(
-                                      "vi-VN"
-                                    )}
-                                  </p>
-                                </div>
-                                {!notif.read && (
-                                  <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-2"></div>
-                                )}
+                              <div className="w-12 h-12 bg-gradient-to-r from-pink-400 to-red-400 rounded-full flex items-center justify-center text-white font-bold text-base flex-shrink-0 shadow-md">
+                                ❤️
                               </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm text-gray-900 font-['Inter',sans-serif]">
+                                  <span className="font-semibold text-gray-900 mr-1">
+                                    {notif.from}
+                                  </span>
+                                  <span className="text-gray-800">
+                                    đã thích bài viết của bạn
+                                  </span>
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1 font-['Inter',sans-serif]">
+                                  {new Date(notif.timestamp).toLocaleString(
+                                    "vi-VN"
+                                  )}
+                                </p>
+                              </div>
+                              {!notif.read && (
+                                <div className="w-3 h-3 bg-blue-600 rounded-full flex-shrink-0 mt-2 shadow-sm" />
+                              )}
                             </div>
                           ))}
                         </div>
@@ -542,7 +771,7 @@ function Header() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg w-full max-w-5xl h-full max-h-[90vh] flex flex-col">
             <div className="p-4 border-b flex items-center justify-between">
-              <h2 className="text-xl font-semibold">Messages</h2>
+              <h2 className="text-xl font-semibold">Tin nhắn</h2>
               <button
                 onClick={() => setShowChat(false)}
                 className="p-2 hover:bg-gray-100 rounded-full transition-colors"

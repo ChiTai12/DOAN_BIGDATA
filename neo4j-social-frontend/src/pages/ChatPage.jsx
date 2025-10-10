@@ -15,7 +15,7 @@ export default function ChatPage() {
               onClick={() => setSelected(null)}
               className="text-gray-500 hover:text-gray-700 text-sm"
             >
-              ← Back
+              ← Quay lại
             </button>
             <span className="font-semibold text-sm">
               {selected.displayName || selected.username}

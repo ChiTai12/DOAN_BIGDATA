@@ -24,7 +24,21 @@ function LoginModal({ onClose }) {
           username: formData.username,
           password: formData.password,
         });
-        login(response.data.user, response.data.token);
+        // Some backends return token in different shapes. Try common locations.
+        const data = response.data || {};
+        const tokenCandidate =
+          data.token ||
+          data.accessToken ||
+          data?.data?.token ||
+          data?.token?.token;
+        const userCandidate = data.user ?? data;
+        if (!tokenCandidate) {
+          console.warn("Login response did not include a token:", data);
+        }
+        // Pass whatever we found to the AuthContext.login helper which will
+        // persist the token to localStorage. This ensures the app remains
+        // authenticated across F5 if a token exists.
+        login(userCandidate, tokenCandidate);
         onClose();
       } else {
         await api.post("/auth/register", formData);

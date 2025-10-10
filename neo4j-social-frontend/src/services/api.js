@@ -70,6 +70,10 @@ export const uploadAvatar = (formData) =>
 export const createPost = (postData) => api.post("/posts", postData);
 export const getAllPosts = () => api.get("/posts");
 
+// Social APIs
+// Social APIs
+// (share feature removed)
+
 // Messages APIs
 export const getConversations = () => api.get("/messages/conversations");
 export const getMessages = (conversationId) =>

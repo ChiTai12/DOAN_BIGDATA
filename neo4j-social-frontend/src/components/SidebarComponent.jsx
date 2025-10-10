@@ -37,7 +37,8 @@ const SidebarComponent = () => {
     try {
       const res = await api.get("/users/following");
       if (!signal?.aborted && res.data && Array.isArray(res.data.following)) {
-        setFollowing(new Set(res.data.following));
+        // normalize keys to strings to avoid mismatches between id and username types
+        setFollowing(new Set(res.data.following.map((v) => String(v))));
       }
     } catch (e) {
       // ignore
@@ -56,10 +57,14 @@ const SidebarComponent = () => {
     const onFollow = (e) => {
       try {
         const payload = e.detail || {};
-        if (payload.followerId && payload.followerId === user?.id) {
+        console.log("sidebar onFollow event:", payload);
+        if (
+          payload.followerId &&
+          String(payload.followerId) === String(user?.id)
+        ) {
           setFollowing((prev) => {
             const s = new Set(prev);
-            if (payload.followingId) s.add(payload.followingId);
+            if (payload.followingId) s.add(String(payload.followingId));
             return s;
           });
         }
@@ -71,10 +76,14 @@ const SidebarComponent = () => {
     const onUnfollow = (e) => {
       try {
         const payload = e.detail || {};
-        if (payload.followerId && payload.followerId === user?.id) {
+        console.log("sidebar onUnfollow event:", payload);
+        if (
+          payload.followerId &&
+          String(payload.followerId) === String(user?.id)
+        ) {
           setFollowing((prev) => {
             const s = new Set(prev);
-            if (payload.followingId) s.delete(payload.followingId);
+            if (payload.followingId) s.delete(String(payload.followingId));
             return s;
           });
         }
@@ -94,24 +103,37 @@ const SidebarComponent = () => {
   }, [user?.id, updateTrigger]); // Re-fetch when updateTrigger changes
 
   const handleFollow = async (userId) => {
-    // toggle follow/unfollow
-    const isFollowing = following.has(userId);
-    // optimistic
+    // normalize userId to string for consistent comparison
+    const normalizedUserId = String(userId);
+    const isFollowing = following.has(normalizedUserId);
+
+    console.log("handleFollow:", {
+      userId,
+      normalizedUserId,
+      isFollowing,
+      following: Array.from(following),
+    });
+
+    // optimistic update
     setFollowing((prev) => {
       const s = new Set(prev);
-      if (isFollowing) s.delete(userId);
-      else s.add(userId);
+      if (isFollowing) {
+        s.delete(normalizedUserId);
+      } else {
+        s.add(normalizedUserId);
+      }
       return s;
     });
+
     try {
       if (isFollowing) {
-        await api.delete(`/users/follow/${userId}`);
+        await api.delete(`/users/follow/${normalizedUserId}`);
       } else {
-        await api.post(`/users/follow/${userId}`);
+        await api.post(`/users/follow/${normalizedUserId}`);
       }
       // dispatch local event so other components in the same tab update immediately
       try {
-        const payload = { followerId: user?.id, followingId: userId };
+        const payload = { followerId: user?.id, followingId: normalizedUserId };
         const evtName = isFollowing ? "app:user:unfollow" : "app:user:follow";
         window.dispatchEvent(new CustomEvent(evtName, { detail: payload }));
       } catch (e) {
@@ -119,11 +141,14 @@ const SidebarComponent = () => {
       }
     } catch (err) {
       console.error("Follow toggle failed", err);
-      // rollback
+      // rollback optimistic update
       setFollowing((prev) => {
         const s = new Set(prev);
-        if (isFollowing) s.add(userId);
-        else s.delete(userId);
+        if (isFollowing) {
+          s.add(normalizedUserId);
+        } else {
+          s.delete(normalizedUserId);
+        }
         return s;
       });
     }
@@ -134,9 +159,11 @@ const SidebarComponent = () => {
     return (
       <div className="w-full">
         <div className="bg-white border border-gray-300 rounded-lg p-6 text-center">
-          <h3 className="text-lg font-semibold mb-2">Welcome to Pictogram</h3>
+          <h3 className="text-lg font-semibold mb-2">
+            Chào mừng đến với mạng xã hội
+          </h3>
           <p className="text-gray-600 text-sm">
-            Login to see posts and connect with friends!
+            Đăng nhập để xem bài viết và kết nối với bạn bè!
           </p>
         </div>
       </div>
@@ -152,6 +179,11 @@ const SidebarComponent = () => {
               src={`http://localhost:5000${user.avatarUrl}`}
               alt="Avatar"
               className="w-16 h-16 rounded-full object-cover shadow-avatar"
+              onError={(e) => {
+                try {
+                  e.target.style.display = "none";
+                } catch (err) {}
+              }}
             />
           ) : (
             <div className="w-16 h-16 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-avatar">
@@ -159,18 +191,20 @@ const SidebarComponent = () => {
                 "U"}
             </div>
           )}
-          <div>
-            <div className="font-semibold text-lg text-gray-900">
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-lg text-gray-900 truncate">
               {user?.displayName || user?.username || "Unknown"}
             </div>
-            <div className="text-sm text-gray-600">@{user?.username}</div>
+            <div className="text-sm text-gray-600 truncate">
+              @{user?.username}
+            </div>
           </div>
         </div>
       </div>
 
       <div className="bg-white border border-gray-300 rounded-lg p-6">
         <h3 className="text-lg font-semibold text-gray-700 mb-4">
-          You Can Follow Them
+          Gợi ý kết nối
         </h3>
 
         {loading ? (
@@ -195,34 +229,60 @@ const SidebarComponent = () => {
                     key={suggestion.id || suggestion.username}
                     className="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-lg transition-colors"
                   >
-                    {suggestion?.avatarUrl ? (
-                      <img
-                        src={`http://localhost:5000${suggestion.avatarUrl}`}
-                        alt={suggestion.displayName || suggestion.username}
-                        className="w-12 h-12 rounded-full object-cover shadow-avatar"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold shadow-avatar">
-                        {suggestion.displayName?.[0]?.toUpperCase()}
-                      </div>
-                    )}
-                    <div className="flex-1">
-                      <div className="font-semibold text-gray-900">
+                    <div className="relative w-12 h-12">
+                      {suggestion?.avatarUrl ? (
+                        <>
+                          <img
+                            src={`http://localhost:5000${suggestion.avatarUrl}`}
+                            alt={suggestion.displayName || suggestion.username}
+                            className="w-12 h-12 rounded-full object-cover shadow-avatar"
+                            onError={(e) => {
+                              try {
+                                e.target.style.display = "none";
+                                // show fallback div
+                                const fallback = e.target.nextElementSibling;
+                                if (fallback) fallback.style.display = "flex";
+                              } catch (err) {}
+                            }}
+                          />
+                          <div
+                            className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold shadow-avatar absolute top-0 left-0"
+                            style={{ display: "none" }}
+                          >
+                            {(
+                              suggestion.displayName?.[0] ||
+                              suggestion.username?.[0] ||
+                              "U"
+                            ).toUpperCase()}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold shadow-avatar">
+                          {(
+                            suggestion.displayName?.[0] ||
+                            suggestion.username?.[0] ||
+                            "U"
+                          ).toUpperCase()}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-gray-900 truncate">
                         {suggestion.displayName || suggestion.username}
                       </div>
-                      <div className="text-sm text-gray-500">
+                      <div className="text-sm text-gray-500 truncate">
                         @{suggestion.username}
                       </div>
                     </div>
                     {(() => {
-                      const key = suggestion.id || suggestion.username;
-                      const isFollowing = following.has(key);
+                      const key = String(suggestion.id || suggestion.username);
+                      const isFollowing = following.has(String(key));
                       return (
                         <button
                           onClick={() => handleFollow(key)}
                           onMouseEnter={() => setHovered(key)}
                           onMouseLeave={() => setHovered(null)}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ease-in-out transform ${
+                          className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ease-in-out transform min-w-[100px] ${
                             isFollowing
                               ? "bg-gray-200 text-gray-800 hover:bg-red-500 hover:text-white hover:scale-105"
                               : "bg-blue-500 text-white hover:bg-blue-600"
@@ -230,9 +290,9 @@ const SidebarComponent = () => {
                         >
                           {isFollowing
                             ? hovered === key
-                              ? "Unfollow"
-                              : "Following"
-                            : "Follow"}
+                              ? "Bỏ theo dõi"
+                              : "Đang theo dõi"
+                            : "Theo dõi"}
                         </button>
                       );
                     })()}

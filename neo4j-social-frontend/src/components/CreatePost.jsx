@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useAuth } from "./AuthContext";
 import api from "../services/api";
+import feelings from "../data/feelings";
 
 function CreatePost({ onPostCreated }) {
   const { user } = useAuth();
@@ -8,6 +9,49 @@ function CreatePost({ onPostCreated }) {
   const [image, setImage] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [selectedIcon, setSelectedIcon] = useState(null);
+  // feelings list imported from data/feelings.js
+  // Keep feelings in local state so we can merge/import packs at runtime
+  const [emojiSet, setEmojiSet] = useState(feelings);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef(null);
+  const composerRef = useRef(null);
+
+  // Insert emoji at cursor position in textarea (or append)
+  const insertEmojiIntoContent = (symbol) => {
+    // keep last selected for compatibility
+    setSelectedIcon(symbol);
+    const el = composerRef.current;
+    if (el && typeof el.selectionStart === "number") {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      const newText = content.slice(0, start) + symbol + content.slice(end);
+      setContent(newText);
+      // place caret after inserted emoji
+      requestAnimationFrame(() => {
+        try {
+          el.focus();
+          const pos = start + symbol.length;
+          el.setSelectionRange(pos, pos);
+        } catch (e) {
+          // ignore
+        }
+      });
+    } else {
+      setContent((c) => c + symbol);
+    }
+  };
+
+  // Close picker when clicking outside
+  useEffect(() => {
+    function onDocClick(e) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target)) {
+        setPickerOpen(false);
+      }
+    }
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, []);
 
   const handleImageChange = (e) => {
     const file = e.target.files[0];
@@ -27,6 +71,7 @@ function CreatePost({ onPostCreated }) {
     try {
       const formData = new FormData();
       formData.append("content", content);
+      if (selectedIcon) formData.append("icon", selectedIcon);
       if (image) {
         formData.append("image", image);
       }
@@ -38,10 +83,15 @@ function CreatePost({ onPostCreated }) {
       setContent("");
       setImage(null);
       setImagePreview(null);
+      setSelectedIcon(null);
       onPostCreated?.();
     } catch (error) {
       console.error("Error creating post:", error);
-      alert("Failed to create post");
+      try {
+        if (window.appToast)
+          window.appToast("Không thể tạo bài viết. Vui lòng thử lại.");
+        else alert("Failed to create post");
+      } catch (e) {}
     } finally {
       setLoading(false);
     }
@@ -67,13 +117,14 @@ function CreatePost({ onPostCreated }) {
           )}
 
           <div className="w-full">
-            <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <div className="rounded-lg border border-gray-100 bg-gray-50 p-4 focus-within:ring-2 focus-within:ring-blue-200 transition">
               <textarea
+                ref={composerRef}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="What's on your mind?"
+                placeholder="Bạn đang nghĩ gì?"
                 id="composer-textarea"
-                className="w-full resize-none bg-transparent outline-none text-gray-900 placeholder-gray-500 text-sm min-h-[72px] max-h-72"
+                className="w-full resize-none bg-transparent outline-none text-gray-900 placeholder-gray-400 text-base min-h-[96px] max-h-72 p-0 leading-relaxed"
                 rows="3"
               />
 
@@ -113,7 +164,7 @@ function CreatePost({ onPostCreated }) {
                     <circle cx="8.5" cy="8.5" r="1.5" />
                     <polyline points="21,15 16,10 5,21" />
                   </svg>
-                  Photo
+                  Ảnh
                   <input
                     type="file"
                     accept="image/*"
@@ -121,6 +172,66 @@ function CreatePost({ onPostCreated }) {
                     className="hidden"
                   />
                 </label>
+                {/* Feeling (emoji) picker — stores emoji symbol into `icon` */}
+                <div className="relative" ref={pickerRef}>
+                  {/* Feeling button (shows selected icon + label) */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPickerOpen((s) => !s);
+                    }}
+                    className="flex items-center gap-2 px-2 py-1 rounded-md text-sm bg-transparent hover:bg-gray-50"
+                    title={selectedIcon ? "Thay đổi cảm xúc" : "Thêm cảm xúc"}
+                  >
+                    <span className="text-lg">{selectedIcon || "😊"}</span>
+                    <span className="text-sm text-gray-700">Cảm xúc</span>
+                    {selectedIcon && (
+                      <button
+                        type="button"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setSelectedIcon(null);
+                        }}
+                        className="ml-2 text-xs text-gray-500 hover:text-gray-700"
+                        title="Xóa cảm xúc"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </button>
+
+                  {/* Picker popup */}
+                  {pickerOpen && (
+                    <div className="absolute z-40 mt-2 w-80 md:w-96 bg-white border border-gray-200 rounded-md shadow-lg p-4">
+                      <div className="flex items-center mb-2">
+                        <div className="text-sm font-medium text-gray-700">
+                          Chọn cảm xúc
+                        </div>
+                      </div>
+
+                      <div className="max-h-60 overflow-y-auto overflow-x-hidden pr-3">
+                        <div className="grid grid-cols-8 gap-2">
+                          {emojiSet.map(({ key, symbol, label }) => (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => {
+                                // insert emoji into the composer; keep picker open for multiple
+                                insertEmojiIntoContent(symbol);
+                              }}
+                              className={`w-12 h-12 rounded-md flex items-center justify-center text-2xl transition-colors hover:bg-gray-100`}
+                              title={label}
+                            >
+                              {symbol}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {/* import removed — only built-in emojis are shown */}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <button
@@ -128,7 +239,7 @@ function CreatePost({ onPostCreated }) {
                 disabled={(!content.trim() && !image) || loading}
                 className="bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
               >
-                {loading ? "Posting..." : "Post"}
+                {loading ? "Đang đăng..." : "Đăng"}
               </button>
             </div>
           </div>

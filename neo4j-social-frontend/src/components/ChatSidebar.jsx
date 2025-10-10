@@ -94,10 +94,10 @@ export default function ChatSidebar({ onSelect }) {
             (t) => t.lastMsg && (t.lastMsg.text || t.lastMsg.type)
           ).length > 0 && (
             <div>
-              <div className="text-xs text-gray-600 font-medium mb-2 uppercase tracking-wide">
-                Cuộc trò chuyện gần đây
+              <div className="text-xs text-gray-600 font-medium mb-2 uppercase tracking-wide font-['Inter',sans-serif]">
+                CUỘC TRÒ CHUYỆN GẦN ĐÂY
               </div>
-              <div className="space-y-1 mb-4">
+              <div className="space-y-2 mb-4">
                 {threads
                   .filter(
                     (t) => t.lastMsg && (t.lastMsg.text || t.lastMsg.type)
@@ -106,7 +106,7 @@ export default function ChatSidebar({ onSelect }) {
                     <button
                       key={`thread-${t.other?.id || index}`}
                       onClick={() => onSelect(t.other)}
-                      className="w-full text-left flex items-center gap-3 p-2 hover:bg-gray-50 rounded transition-colors"
+                      className="w-full text-left flex items-center gap-3 p-3 bg-white rounded-lg shadow-sm hover:shadow-md transition-colors"
                     >
                       {t.other?.avatarUrl ? (
                         <img
@@ -133,7 +133,7 @@ export default function ChatSidebar({ onSelect }) {
                           {t.lastMsg?.text || "Chưa có tin nhắn"}
                         </div>
                       </div>
-                      <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                      <div className="w-2 h-2 bg-green-400 rounded-full" />
                     </button>
                   ))}
               </div>
@@ -142,10 +142,8 @@ export default function ChatSidebar({ onSelect }) {
 
           {/* Always show suggestions for starting new conversations */}
           <div>
-            <div className="text-xs text-gray-600 font-medium mb-2 uppercase tracking-wide">
-              {threads.length > 0
-                ? "Bắt đầu cuộc trò chuyện mới"
-                : "Bắt đầu trò chuyện"}
+            <div className="text-xs text-gray-600 font-medium mb-2 uppercase tracking-wide font-['Inter',sans-serif]">
+              BẮT ĐẦU CUỘC TRÒ CHUYỆN MỚI
             </div>
 
             {loadingSuggestions ? (
@@ -165,36 +163,29 @@ export default function ChatSidebar({ onSelect }) {
                 </div>
               </div>
             ) : (
-              <div className="space-y-1">
+              <div className="space-y-2">
                 {(() => {
-                  // Threads that exist but have no messages (pending starts)
-                  const pending = threads
-                    .filter(
-                      (t) => !t.lastMsg || !(t.lastMsg.text || t.lastMsg.type)
-                    )
-                    .map((t) => t.other)
-                    .filter(Boolean);
+                  // Build a set of users that already have threads (by id or username)
+                  const existing = new Set(
+                    threads
+                      .map((t) => t.other?.id || t.other?.username)
+                      .filter(Boolean)
+                  );
 
-                  // Merge pending and suggestions, dedupe by id/username
-                  const combined = [];
-                  const seen = new Set();
-                  const pushIfNew = (u) => {
-                    const key = u?.id || u?.username;
-                    if (!key || seen.has(key)) return;
-                    seen.add(key);
-                    combined.push(u);
-                  };
+                  // Filter suggestions to only those who do NOT already have a thread
+                  const filteredSuggestions = suggestions.filter((s) => {
+                    const key = s?.id || s?.username;
+                    if (!key) return false;
+                    return !existing.has(key);
+                  });
 
-                  pending.forEach(pushIfNew);
-                  suggestions.forEach(pushIfNew);
-
-                  return combined.map((suggestion, index) => (
+                  return filteredSuggestions.map((suggestion, index) => (
                     <button
                       key={`suggestion-${
                         suggestion.id || suggestion.username || index
                       }`}
                       onClick={() => onSelect(suggestion)}
-                      className="w-full text-left flex items-center gap-3 p-2 hover:bg-gray-50 rounded transition-colors"
+                      className="w-full text-left flex items-center gap-3 p-3 bg-white rounded-lg shadow-sm hover:shadow-md transition-colors"
                     >
                       {suggestion?.avatarUrl ? (
                         <img
@@ -218,7 +209,7 @@ export default function ChatSidebar({ onSelect }) {
                           @{suggestion.username}
                         </div>
                       </div>
-                      <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                      <div className="w-2 h-2 bg-green-400 rounded-full" />
                     </button>
                   ));
                 })()}

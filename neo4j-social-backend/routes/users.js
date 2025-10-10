@@ -65,6 +65,30 @@ router.get("/suggestions", async (req, res) => {
   }
 });
 
+// Get current authenticated user
+router.get("/me", verifyToken, async (req, res) => {
+  const session = driver.session();
+  try {
+    const result = await session.run(
+      `MATCH (u:User {id:$id}) RETURN u LIMIT 1`,
+      { id: req.userId }
+    );
+    if (result.records.length === 0)
+      return res.status(404).json({ error: "User not found" });
+
+    const user = result.records[0].get("u").properties;
+    // strip sensitive fields
+    delete user.passwordHash;
+    delete user.password;
+    res.json(user);
+  } catch (error) {
+    console.error("Failed to fetch current user:", error);
+    res.status(500).json({ error: "Failed to fetch current user" });
+  } finally {
+    await session.close();
+  }
+});
+
 // Get list of user ids that the current user is following
 router.get("/following", verifyToken, async (req, res) => {
   const session = driver.session();

@@ -17,3 +17,42 @@
   box-shadow: 0 6px 18px rgba(16, 24, 40, 0.08),
     0 2px 6px rgba(16, 24, 40, 0.06);
 }
+
+/* UI tweaks requested: adjust common utility sizes and icon visuals */
+/* Make gap-4 slightly larger (1.1rem) for roomier layouts */
+.gap-4 {
+  gap: 1.1rem !important;
+}
+
+/* Adjust p-8 to use 2.2rem as requested */
+.p-8 {
+  padding: 2.2rem !important;
+}
+
+/* Remove background for icon tiles when desired */
+.icon-no-bg {
+  background-color: transparent !important;
+}
+
+/* Remove all browser default focus outlines to prevent black lines on click */
+* {
+  outline: none !important;
+}
+
+/* But add back accessible focus for keyboard users only */
+*:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.8) !important;
+  outline-offset: 2px !important;
+}
+
+/* Alternative: remove focus on common interactive elements */
+button:focus,
+input:focus,
+textarea:focus,
+select:focus,
+a:focus,
+div:focus,
+[tabindex]:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
