@@ -40,30 +40,39 @@ router.post("/send", verifyToken, async (req, res) => {
   );
 
   const { toUserId, text } = req.body;
-  // Always extract first emoji from text to store as separate icon field
-  let icon = "";
-  if (text && typeof text === "string") {
-    try {
-      const re = emojiRegex();
-      const match = re.exec(text);
-      if (match && match[0]) icon = match[0];
-    } catch (e) {
-      // ignore extraction errors
-    }
-  }
-  // Debug: log extraction outcome to help diagnose missing icon issues
+  // Determine icon list: use client-provided icon when present (authoritative),
+  // otherwise extract emojis from text. Parse string payloads (JSON or raw emojis).
+  let icon = [];
   try {
-    const re2 = emojiRegex();
-    const match2 = text && typeof text === "string" ? re2.exec(text) : null;
+    const rawIcon = req.body.icon;
+    if (typeof rawIcon !== "undefined" && rawIcon !== null && rawIcon !== "") {
+      if (Array.isArray(rawIcon)) {
+        icon = rawIcon.filter(Boolean);
+      } else if (typeof rawIcon === "string") {
+        // try JSON parse (frontend may send JSON stringified arrays), else extract emojis
+        try {
+          const parsed = JSON.parse(rawIcon);
+          if (Array.isArray(parsed)) {
+            icon = parsed.filter(Boolean);
+          } else {
+            icon = rawIcon.match(emojiRegex()) || [];
+          }
+        } catch (e) {
+          icon = rawIcon.match(emojiRegex()) || [];
+        }
+      }
+    } else if (text && typeof text === "string") {
+      icon = text.match(emojiRegex()) || [];
+    }
+    // minimal debug to help reproduce if something still wrong
     console.log("🪪 message send debug:", {
       toUserId,
       text,
       providedIcon: req.body.icon,
-      extractedIcon: icon,
-      match2,
+      finalIcon: icon,
     });
-  } catch (dbgE) {
-    console.warn("🪪 message debug failed", dbgE);
+  } catch (e) {
+    console.warn("🪪 emoji extraction failed", e);
   }
   if (!toUserId || !text)
     return res.status(400).json({ error: "toUserId and text required" });
@@ -79,7 +88,7 @@ router.post("/send", verifyToken, async (req, res) => {
     const result = await session.run(
       `
       MATCH (c:Conversation {id:$convId})
-      CREATE (m:Message {id: $messageId, text:$text, senderId:$fromId, icon:coalesce($icon, ''), createdAt: datetime()})
+  CREATE (m:Message {id: $messageId, text:$text, senderId:$fromId, icon:coalesce($icon, []), createdAt: datetime()})
       CREATE (c)-[:HAS_MESSAGE]->(m)
       SET c.lastUpdated = datetime(), c.lastMessageId = m.id, c.lastMessageText = m.text
       RETURN m, c

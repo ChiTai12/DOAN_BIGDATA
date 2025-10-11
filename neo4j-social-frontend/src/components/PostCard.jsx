@@ -4,6 +4,44 @@ import api from "../services/api";
 import feelings from "../data/feelings";
 import EditPostModal from "./EditPostModal";
 
+// Helper to render icon metadata which may be stored as an array, a
+// comma-separated string, or a single emoji string. Preserves order
+// and duplicates by rendering individual emoji spans.
+function renderIcons(icon) {
+  if (!icon) return null;
+  // already an array
+  if (Array.isArray(icon)) {
+    return (
+      <span className="flex items-center gap-1">
+        {icon.map((s, i) => (
+          <span key={i} className="text-lg">
+            {s}
+          </span>
+        ))}
+      </span>
+    );
+  }
+  // comma-separated legacy string (e.g. "😀,😀,😍")
+  if (typeof icon === "string" && icon.includes(",")) {
+    const arr = icon
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (arr.length === 0) return null;
+    return (
+      <span className="flex items-center gap-1">
+        {arr.map((s, i) => (
+          <span key={i} className="text-lg">
+            {s}
+          </span>
+        ))}
+      </span>
+    );
+  }
+  // fallback: single string
+  return <span className="text-lg">{icon}</span>;
+}
+
 // Normalize different shapes of comment payloads from API / realtime events
 const normalizeComment = (raw) => {
   if (!raw) return null;
@@ -1109,9 +1147,7 @@ function CommentNode({
                 </div>
                 {/* Nội dung reply */}
                 <div className="text-sm text-gray-800 font-medium flex items-center gap-2">
-                  {node.comment?.icon ? (
-                    <span className="text-lg">{node.comment.icon}</span>
-                  ) : null}
+                  {node.comment?.icon ? renderIcons(node.comment.icon) : null}
                   <div>{node.comment?.content}</div>
                 </div>
                 <div className="mt-2 text-xs text-gray-400 flex items-center gap-3">
@@ -1132,9 +1168,7 @@ function CommentNode({
             ) : (
               <div>
                 <div className="text-sm text-gray-800 flex items-center gap-2">
-                  {node.comment?.icon ? (
-                    <span className="text-lg">{node.comment.icon}</span>
-                  ) : null}
+                  {node.comment?.icon ? renderIcons(node.comment.icon) : null}
                   <div>
                     <span className="font-semibold mr-2">
                       {node.author?.displayName || node.author?.username}

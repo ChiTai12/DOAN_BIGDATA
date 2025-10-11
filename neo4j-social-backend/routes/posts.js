@@ -2,6 +2,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import driver from "../db/driver.js";
+import emojiRegex from "emoji-regex";
 import { verifyToken } from "../middleware/auth.js";
 import { v4 as uuidv4 } from "uuid";
 
@@ -20,8 +21,74 @@ const upload = multer({ storage });
 // Đăng bài
 router.post("/", verifyToken, upload.single("image"), async (req, res) => {
   const { content } = req.body;
-  // ensure icon parameter is always present (Neo4j driver will error if referenced but missing)
-  const icon = typeof req.body.icon === "undefined" ? "" : req.body.icon;
+  // Determine icon array: use provided icon when present (array or JSON string),
+  // otherwise extract emojis from content preserving order and duplicates.
+  let icon = [];
+  try {
+    const rawIcon = req.body.icon;
+    // If client provided an array, use it directly
+    if (Array.isArray(rawIcon)) {
+      icon = rawIcon.filter(Boolean);
+    }
+    // If client provided a string, try to parse JSON array first; otherwise prefer extracting from content when available
+    else if (typeof rawIcon === "string" && rawIcon !== "") {
+      try {
+        const parsed = JSON.parse(rawIcon);
+        if (Array.isArray(parsed)) {
+          icon = parsed.filter(Boolean);
+        } else {
+          // prefer extracting from content if present, else fall back to rawIcon matches
+          icon =
+            content && typeof content === "string"
+              ? content.match(emojiRegex()) || []
+              : rawIcon.match(emojiRegex()) || [];
+        }
+      } catch (e) {
+        icon =
+          content && typeof content === "string"
+            ? content.match(emojiRegex()) || []
+            : rawIcon.match(emojiRegex()) || [];
+      }
+    }
+    // No rawIcon provided - extract from content
+    else if (content && typeof content === "string") {
+      icon = content.match(emojiRegex()) || [];
+    }
+  } catch (e) {
+    console.warn("🪪 post icon extraction failed", e);
+    icon = [];
+  }
+
+  console.log("🔍 Post creation debug:", {
+    content,
+    icon,
+    rawIcon: req.body.icon,
+  });
+
+  // normalize icon: ensure it's always an array (avoid empty string persisted)
+  try {
+    if (!Array.isArray(icon)) {
+      if (typeof icon === "string") {
+        // try parse JSON array or extract emojis from string
+        try {
+          const parsed = JSON.parse(icon);
+          icon = Array.isArray(parsed)
+            ? parsed.filter(Boolean)
+            : icon.match(emojiRegex()) || [];
+        } catch (e) {
+          icon = icon.match(emojiRegex()) || [];
+        }
+      } else if (icon == null) {
+        icon = [];
+      } else {
+        // unexpected type, coerce to empty array
+        icon = [];
+      }
+    }
+  } catch (e) {
+    icon = [];
+  }
+
   const imageUrl = req.file ? `/uploads/${req.file.filename}` : "";
   const postId = uuidv4();
   const session = driver.session();
@@ -31,7 +98,7 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
       `
       MATCH (u:User {id:$userId})
       CREATE (u)-[:POSTED]->(p:Post {
-        id:$postId, content:$content, imageUrl:$imageUrl, icon:coalesce($icon, ''), createdAt:timestamp()
+        id:$postId, content:$content, imageUrl:$imageUrl, icon:coalesce($icon, []), createdAt:timestamp()
       })
       RETURN p
       `,
@@ -209,7 +276,30 @@ router.put(
   async (req, res) => {
     const { postId } = req.params;
     const { content, removeImage } = req.body;
-    const icon = typeof req.body.icon === "undefined" ? "" : req.body.icon;
+    // parse icon similar to create: prefer provided array/string
+    // if client did NOT provide icon, we'll re-extract from the updated content later
+    let icon = [];
+    try {
+      const rawIcon = req.body.icon;
+      if (
+        typeof rawIcon !== "undefined" &&
+        rawIcon !== null &&
+        rawIcon !== ""
+      ) {
+        if (Array.isArray(rawIcon)) icon = rawIcon.filter(Boolean);
+        else if (typeof rawIcon === "string") {
+          try {
+            const parsed = JSON.parse(rawIcon);
+            if (Array.isArray(parsed)) icon = parsed.filter(Boolean);
+            else icon = rawIcon.match(emojiRegex()) || [];
+          } catch (e) {
+            icon = rawIcon.match(emojiRegex()) || [];
+          }
+        }
+      }
+    } catch (e) {
+      icon = [];
+    }
     const session = driver.session();
 
     try {
@@ -243,6 +333,30 @@ router.put(
         newImageUrl = "";
       }
 
+      // For post updates: ALWAYS re-extract icons from content to match messenger behavior
+      // Ignore any provided icon and extract fresh from the new content
+      let finalIcon = [];
+      try {
+        const effectiveContent =
+          typeof content !== "undefined" && content !== null
+            ? content
+            : currentPost.content;
+        if (effectiveContent && typeof effectiveContent === "string") {
+          finalIcon = effectiveContent.match(emojiRegex()) || [];
+        }
+        console.log("🔍 Post update - extracted icon from content:", {
+          postId,
+          effectiveContent,
+          finalIcon,
+          originalRawIcon: req.body.icon,
+        });
+      } catch (e) {
+        console.warn("🔍 Icon extraction failed:", e);
+        finalIcon = [];
+      }
+
+      console.log("🔍 About to update with finalIcon:", finalIcon);
+
       // Cập nhật bài viết
       const updateRes = await session.run(
         `
@@ -257,8 +371,15 @@ router.put(
           postId,
           content: content || currentPost.content,
           imageUrl: newImageUrl,
-          icon,
+          icon: finalIcon,
         }
+      );
+
+      console.log(
+        "🔍 Update result:",
+        updateRes.records.length > 0
+          ? updateRes.records[0].get("p").properties
+          : "No records"
       );
 
       // Fetch updated post with author info for real-time event
@@ -330,8 +451,29 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
     parentId = null;
   // coerce parentId to string when present to avoid surprising types from client
   if (parentId) parentId = String(parentId);
-  // icon is optional feeling/emoji attached to comment
-  const icon = typeof req.body.icon === "undefined" ? "" : req.body.icon;
+  // icon is optional feeling/emoji attached to comment - parse into array
+  let icon = [];
+  try {
+    const rawIcon = req.body.icon;
+    if (typeof rawIcon !== "undefined" && rawIcon !== null && rawIcon !== "") {
+      if (Array.isArray(rawIcon)) {
+        icon = rawIcon.filter(Boolean);
+      } else if (typeof rawIcon === "string") {
+        try {
+          const parsed = JSON.parse(rawIcon);
+          if (Array.isArray(parsed)) icon = parsed.filter(Boolean);
+          else icon = rawIcon.match(emojiRegex()) || [];
+        } catch (e) {
+          icon = rawIcon.match(emojiRegex()) || [];
+        }
+      }
+    } else if (content && typeof content === "string") {
+      // fallback: extract emojis from content
+      icon = content.match(emojiRegex()) || [];
+    }
+  } catch (e) {
+    icon = [];
+  }
   console.log("📥 Received comment request:", {
     postId,
     content,
@@ -385,12 +527,12 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
       OPTIONAL MATCH (parent:Comment {id:$parentId})
       WITH author, p, parent
       CREATE (author)-[:COMMENTED]->(c:Comment {
-        id:$commentId,
-        content:$content,
-        parentId: coalesce($parentId, ''),
-        threadId: coalesce(parent.threadId, parent.id, $commentId),
-        icon: coalesce($icon, ''),
-        createdAt: timestamp()
+  id:$commentId,
+  content:$content,
+  parentId: coalesce($parentId, ''),
+  threadId: coalesce(parent.threadId, parent.id, $commentId),
+  icon: coalesce($icon, []),
+  createdAt: timestamp()
       })-[:ABOUT]->(p)
       FOREACH (_ IN CASE WHEN parent IS NOT NULL THEN [1] ELSE [] END |
         CREATE (c)-[:REPLAY]->(parent)

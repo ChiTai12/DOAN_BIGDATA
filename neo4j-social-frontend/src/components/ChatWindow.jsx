@@ -44,25 +44,15 @@ export default function ChatWindow({ peer }) {
   const pickerRef = useRef(null);
   const pickerButtonRef = useRef(null);
 
+  // Helper to handle icon display - since backend now stores icon separately,
+  // we don't need to strip emojis from text anymore
+  const stripIconFromText = (textValue, iconValue) => {
+    // Keep text as-is since backend maintains text and icon separately
+    return textValue || "";
+  };
+
   useEffect(() => {
     let cancelled = false;
-    // Helper to remove a single occurrence of the icon from text when appropriate
-    const stripIconFromText = (text, icon) => {
-      if (!text || !icon) return text;
-      try {
-        const idx = text.indexOf(icon);
-        if (idx === -1) return text;
-        // Only strip when icon is at start/end or surrounded by spaces to avoid removing
-        const before = text[idx - 1] || '';
-        const after = text[idx + icon.length] || '';
-        const isBounded = idx === 0 || before === ' ' || after === ' ' || idx + icon.length === text.length;
-        if (!isBounded) return text;
-        const newText = (text.slice(0, idx) + text.slice(idx + icon.length)).replace(/\s+/g, ' ').trim();
-        return newText === '' ? text : newText;
-      } catch (e) {
-        return text;
-      }
-    };
     const fetchConversation = async () => {
       if (!peer || !user) return;
       setLoading(true);
@@ -70,13 +60,12 @@ export default function ChatWindow({ peer }) {
         const res = await api.get(`/messages/conversation/${peer.id}`);
         if (!cancelled) {
           const formattedMessages = (res.data || []).map((msg) => ({
-              ...msg,
-              direction: msg.senderId === user.id ? "out" : "in",
-              createdAt: formatDateTime(msg.createdAt),
-              // avoid duplicate emoji: if backend provided icon and it's present in text,
-              // strip a bounded occurrence so UI shows icon only once
-              text: stripIconFromText(msg.text, msg.icon),
-            }));
+            ...msg,
+            direction: msg.senderId === user.id ? "out" : "in",
+            createdAt: formatDateTime(msg.createdAt),
+            // Keep text as-is since backend stores icon separately
+            text: stripIconFromText(msg.text, msg.icon),
+          }));
           setMessages(formattedMessages);
         }
       } catch (err) {
@@ -170,8 +159,8 @@ export default function ChatWindow({ peer }) {
   const send = async () => {
     if (!text.trim() || !peer) return;
     const payload = { toUserId: peer.id, text };
-    // include icon field when available (optional)
-    if (selectedIcon) payload.icon = selectedIcon;
+    // Note: selectedIcon is no longer sent to avoid duplication with emojis in text
+    // Backend will extract emojis from text automatically
     try {
       const res = await api.post("/messages/send", payload);
       setMessages((m) => [
@@ -212,14 +201,21 @@ export default function ChatWindow({ peer }) {
           <div className="text-sm text-gray-500">No messages</div>
         ) : (
           messages.map((m, i) => (
-            <div key={i} className={`w-full flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
+            <div
+              key={i}
+              className={`w-full flex ${
+                m.direction === "out" ? "justify-end" : "justify-start"
+              }`}
+            >
               <div
                 className={`inline-block max-w-[80%] p-3 rounded-lg ${
-                  m.direction === "out" ? "bg-blue-600 text-white text-right" : "bg-gray-200 text-gray-900"
+                  m.direction === "out"
+                    ? "bg-blue-600 text-white text-right"
+                    : "bg-gray-200 text-gray-900"
                 }`}
               >
                 <div className="flex items-center gap-3 text-lg whitespace-pre-wrap break-words">
-                  {m.icon ? <span className="flex-shrink-0">{m.icon}</span> : null}
+                  {/* Only display text from database - it contains emojis as user typed */}
                   <div className="inline-block">{m.text}</div>
                 </div>
               </div>
@@ -268,8 +264,8 @@ export default function ChatWindow({ peer }) {
                         /* ignore */
                       }
                     });
-                    // allow selecting multiple icons without auto-closing picker
-                    setSelectedIcon(sym);
+                    // Don't set selectedIcon when inserting into text to avoid duplication
+                    // Backend will extract emojis from text automatically
                   }}
                   className="p-2 text-lg rounded hover:bg-gray-100 transition-colors"
                   title={f.label}

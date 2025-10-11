@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import api from "../services/api";
 import feelings from "../data/feelings";
+import emojiRegex from "emoji-regex";
 
 function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
   const [content, setContent] = useState(post?.content || "");
@@ -184,6 +185,43 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
     }
   };
 
+  // Extract emojis from content preserving order and duplicates
+  const computedIcons = useMemo(() => {
+    try {
+      if (!content) return [];
+      const rx = emojiRegex();
+      const m = content.match(rx);
+      return Array.isArray(m) ? m : [];
+    } catch (e) {
+      return [];
+    }
+  }, [content]);
+
+  // Helper to render a compact emoji strip with overflow indicator
+  const renderPreviewIcons = (icons, limit = 4) => {
+    if (!icons || icons.length === 0) return null;
+    const visible = icons.slice(0, limit);
+    const remaining = icons.length - visible.length;
+    return (
+      <div className="flex items-center gap-1 ml-3">
+        {visible.map((s, i) => (
+          <span key={i} className="text-lg leading-none">
+            {s}
+          </span>
+        ))}
+        {remaining > 0 && (
+          <span className="text-xs text-gray-500 ml-1">+{remaining}</span>
+        )}
+      </div>
+    );
+  };
+
+  // choose a single icon to show on the Feelings button: prefer live computed icon from content
+  const displayFeelIcon =
+    computedIcons && computedIcons.length > 0
+      ? computedIcons[0]
+      : selectedIcon || "😊";
+
   const handleRemoveImage = () => {
     setImageFile(null);
     setImagePreview(null);
@@ -201,7 +239,7 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
     try {
       const formData = new FormData();
       formData.append("content", content);
-      formData.append("icon", selectedIcon);
+      // Do NOT append icon on update. Backend will extract emojis from content.
 
       if (imageFile) {
         formData.append("image", imageFile);
@@ -222,7 +260,7 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
           detail: {
             postId: post.id,
             content,
-            icon: selectedIcon,
+            // icon intentionally omitted so listeners read from server
             imageUrl: imageFile
               ? "new-image"
               : removeImage
@@ -308,6 +346,8 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
               />
             </div>
 
+            {/* Live emoji preview is rendered inline with action buttons below */}
+
             {/* Image preview */}
             {imagePreview && (
               <div className="mb-4 relative">
@@ -327,7 +367,7 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
             )}
 
             {/* Action buttons */}
-            <div className="flex items-center gap-4 mb-4">
+            <div className="flex items-center gap-3 mb-4">
               {/* Image upload */}
               <button
                 type="button"
@@ -348,6 +388,11 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
                 Ảnh
               </button>
 
+              {/* Live emoji preview (shows up to 4 with +N overflow) */}
+              <div className="ml-2 mr-1 flex items-center">
+                {renderPreviewIcons(computedIcons, 4)}
+              </div>
+
               {/* Feelings */}
               <div className="relative">
                 <button
@@ -359,7 +404,6 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
                   }}
                   className="flex items-center gap-2 text-blue-500 hover:text-blue-600"
                 >
-                  <span className="text-lg">{selectedIcon || "😊"}</span>
                   Cảm xúc
                 </button>
               </div>
