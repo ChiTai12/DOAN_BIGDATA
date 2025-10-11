@@ -58,9 +58,16 @@ function Feed() {
     const onPostUpdated = (e) => {
       const payload = e.detail || e;
       console.debug("Feed received app:post:updated", payload);
-      if (!payload || !payload.postId) return;
-
-      // Refresh the entire feed to get updated post
+      if (!payload) return;
+      // accept multiple payload shapes: { postId }, { post: { id } }, { id }
+      const postId =
+        payload.postId || (payload.post && payload.post.id) || payload.id || null;
+      if (!postId) {
+        // no post id provided — conservatively refresh feed
+        fetchPosts();
+        return;
+      }
+      // If update references a specific post, refresh the feed so UI shows latest
       fetchPosts();
     };
 

@@ -69,6 +69,16 @@ function Header() {
           console.warn("Failed to forward post:created", e);
         }
       });
+      // forward post updates so Feed and PostCard can refresh in real-time
+      socket.on("post:updated", (payload) => {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("app:post:updated", { detail: payload })
+          );
+        } catch (e) {
+          console.warn("Failed to forward post:updated", e);
+        }
+      });
       // forward post deletions to window so Feed can remove posts in real-time
       socket.on("post:deleted", (payload) => {
         try {
