@@ -331,6 +331,7 @@ function PostCard({ post, author, onDelete }) {
   const [replyTarget, setReplyTarget] = useState(null); // { id, authorName }
   const [inlineReplyTarget, setInlineReplyTarget] = useState(null); // comment id for inline composer
   const [replyCanceled, setReplyCanceled] = useState(false);
+  const [deleted, setDeleted] = useState(false);
 
   // Normalize different shapes of comment payloads from API / realtime events
   const normalizeComment = (raw) => {
@@ -526,6 +527,41 @@ function PostCard({ post, author, onDelete }) {
     };
   }, [post.id, user]);
 
+  // Listen for post deletion events and remove this post from UI immediately
+  useEffect(() => {
+    function onPostDeleted(e) {
+      const payload = e.detail || e;
+      if (!payload) return;
+      const deletedId =
+        payload.postId || payload.id || (payload.post && payload.post.id);
+      if (!deletedId) return;
+      if (String(deletedId) === String(post.id)) {
+        // If parent provided an onDelete callback (Feed), call it so post is removed from list
+        try {
+          if (typeof onDelete === "function") {
+            onDelete(post.id);
+          } else {
+            // otherwise mark deleted locally so UI can show a placeholder
+            setDeleted(true);
+            try {
+              if (window.appToast)
+                window.appToast("Bài viết đã bị xóa", { duration: 2000 });
+            } catch (err) {}
+          }
+        } catch (err) {
+          console.warn(
+            "Failed to handle app:post:deleted for post",
+            post.id,
+            err
+          );
+        }
+      }
+    }
+
+    window.addEventListener("app:post:deleted", onPostDeleted);
+    return () => window.removeEventListener("app:post:deleted", onPostDeleted);
+  }, [post.id, onDelete]);
+
   // close bottom picker when clicking outside
   useEffect(() => {
     function onDocClick(e) {
@@ -622,6 +658,14 @@ function PostCard({ post, author, onDelete }) {
 
   // Kiểm tra user có phải author không
   const isAuthor = user && author && user.username === author.username;
+
+  if (deleted) {
+    return (
+      <div className="bg-white border border-gray-300 rounded-lg overflow-hidden p-4 text-center text-sm text-gray-500">
+        Bài viết đã bị xóa
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white border border-gray-300 rounded-lg overflow-hidden">

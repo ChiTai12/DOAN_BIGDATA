@@ -21,6 +21,7 @@
 /* UI tweaks requested: adjust common utility sizes and icon visuals */
 /* Make gap-4 slightly larger (1.1rem) for roomier layouts */
 .gap-4 {
+  /* roomier but near-default spacing used across the UI */
   gap: 1.1rem !important;
 }
 
@@ -55,4 +56,46 @@ div:focus,
 [tabindex]:focus {
   outline: none !important;
   box-shadow: none !important;
+}
+
+/* Custom override for Tailwind's py-3 utility where a larger horizontal padding
+   is desired for specific button styles used in the auth modal. */
+.py-3 {
+  /* restore standard vertical padding for py-3; avoid forcing horizontal paddings globally */
+  padding-top: 0.75rem !important;
+  padding-bottom: 0.75rem !important;
+}
+
+/* Custom color overrides requested */
+/* removed global overrides for .bg-pink-500 and .bg-indigo-600 to avoid
+  unintentionally changing Tailwind utility colors across the app. If you
+  want modal-specific colors, we should add scoped classes (e.g. .modal-pink)
+  and apply them only where needed. */
+
+/* Scoped button padding for auth modal social buttons only */
+.auth-btn--wide {
+  padding-top: 1rem !important;
+  padding-bottom: 1em !important;
+  padding-right: 4.8rem !important;
+  padding-left: 5rem !important;
+}
+
+/* Scoped modal background color so we don't change global .bg-pink-500 */
+.modal-bg-pink {
+  --tw-bg-opacity: 1;
+  background-color: rgb(95 72 236) !important;
+}
+
+/* Scoped primary auth button color (used only for modal submit) */
+.auth-btn--primary {
+  --tw-bg-opacity: 1;
+  background-color: rgb(10 6 10) !important;
+  color: #ffffff !important;
+}
+.auth-btn--primary:hover {
+  filter: brightness(0.95);
+}
+.auth-btn--primary:disabled {
+  background-color: #d1d5db !important;
+  color: #ffffff !important;
 }

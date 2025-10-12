@@ -227,13 +227,127 @@ router.delete("/delete/:postId", verifyToken, async (req, res) => {
     );
 
     // Xóa post và tất cả relationships (likes, comments, etc.)
-    await session.run(
-      `
-      MATCH (p:Post {id: $postId})
-      DETACH DELETE p
+    // XÓA TOÀN BỘ: comments, notifications, likes và mọi relationships liên quan đến post này
+    let deletedNotifIds = [];
+    let deletedCommentIds = [];
+
+    try {
+      console.log(
+        `🔥 COMPREHENSIVE DELETE for post ${req.params.postId} - removing ALL related data`
+      );
+
+      // 1. Tìm và xóa TẤT CẢ Comment nodes liên quan đến post (bao gồm cả replies)
+      const commentFindQ = `
+        MATCH (c:Comment)-[:ABOUT]->(p:Post {id:$postId})
+        RETURN c.id AS id
+      `;
+      const commentRes = await session.run(commentFindQ, {
+        postId: req.params.postId,
+      });
+      deletedCommentIds = commentRes.records.map((r) => r.get("id")) || [];
+
+      if (deletedCommentIds.length > 0) {
+        console.log(
+          `🗑️ Deleting ${deletedCommentIds.length} Comment nodes for post ${req.params.postId}`
+        );
+        // DETACH DELETE sẽ xóa comment nodes và tất cả relationships (COMMENTED, REPLAY, etc.)
+        await session.run(
+          `MATCH (c:Comment) WHERE c.id IN $ids DETACH DELETE c`,
+          { ids: deletedCommentIds }
+        );
+      }
+
+      // 2. Tìm và xóa TẤT CẢ Notification nodes liên quan đến post HOẶC comments của post
+      const notifFindQ = `
+        MATCH (n:Notification)
+        WHERE exists((n)-[:ABOUT]->(:Post {id:$postId}))
+           OR coalesce(n.postId, '') = $postId
+           OR (n.commentId IS NOT NULL AND n.commentId IN $commentIds)
+        RETURN DISTINCT n.id AS id
+      `;
+      // ensure commentIds is an array (empty array allowed)
+      const notifRes = await session.run(notifFindQ, {
+        postId: req.params.postId,
+        commentIds: Array.isArray(deletedCommentIds) ? deletedCommentIds : [],
+      });
+      deletedNotifIds = notifRes.records.map((r) => r.get("id")) || [];
+
+      if (deletedNotifIds.length > 0) {
+        console.log(
+          `🗑️ Deleting ${deletedNotifIds.length} Notification nodes for post ${req.params.postId}`
+        );
+        // DETACH DELETE sẽ xóa notification nodes và tất cả relationships (HAS_NOTIFICATION, ABOUT, etc.)
+        await session.run(
+          `MATCH (n:Notification) WHERE n.id IN $ids DETACH DELETE n`,
+          { ids: deletedNotifIds }
+        );
+      }
+
+      // 3. Xóa TẤT CẢ relationships LIKES từ users đến post này
+      const likesDeleteRes = await session.run(
+        `
+        MATCH (u:User)-[r:LIKES]->(p:Post {id:$postId})
+        DELETE r
+        RETURN count(r) AS deletedLikes
       `,
-      { postId: req.params.postId }
-    );
+        { postId: req.params.postId }
+      );
+      const deletedLikes = likesDeleteRes.records[0]
+        ? likesDeleteRes.records[0].get("deletedLikes").toNumber()
+        : 0;
+      if (deletedLikes > 0) {
+        console.log(
+          `🗑️ Deleted ${deletedLikes} LIKES relationships for post ${req.params.postId}`
+        );
+      }
+
+      // 4. Xóa các relationships REPLIED_TO liên quan đến comments đã xóa
+      if (deletedCommentIds.length > 0) {
+        try {
+          // Xóa REPLIED_TO nếu cả 2 user không còn comment nào trong post này
+          const repliedToCleanup = await session.run(
+            `
+            MATCH (u1:User)-[r:REPLIED_TO]->(u2:User)
+            WHERE NOT EXISTS((u1)-[:COMMENTED]->(:Comment)-[:ABOUT]->(:Post {id:$postId}))
+              AND NOT EXISTS((u2)-[:COMMENTED]->(:Comment)-[:ABOUT]->(:Post {id:$postId}))
+            DELETE r
+            RETURN count(r) as deletedCount
+          `,
+            { postId: req.params.postId }
+          );
+
+          const deletedRepliedTo =
+            repliedToCleanup.records[0]?.get("deletedCount")?.toNumber() || 0;
+          if (deletedRepliedTo > 0) {
+            console.log(
+              `🗑️ Cleaned up ${deletedRepliedTo} REPLIED_TO relationships for post ${req.params.postId}`
+            );
+          }
+        } catch (e) {
+          console.warn("Failed to clean REPLIED_TO relationships", e);
+        }
+      }
+
+      // 5. Cuối cùng xóa Post node và mọi relationships còn lại
+      await session.run(
+        `
+        MATCH (p:Post {id: $postId})
+        DETACH DELETE p
+      `,
+        { postId: req.params.postId }
+      );
+
+      console.log(
+        `✅ COMPLETELY DELETED post ${req.params.postId} and ALL related data`
+      );
+    } catch (e) {
+      console.error(
+        "❌ Failed comprehensive delete for post",
+        req.params.postId,
+        e && e.stack ? e.stack : e
+      );
+      throw e; // Re-throw để báo lỗi cho client
+    }
 
     // emit real-time post deleted event so clients can remove it from their feeds
     try {
@@ -244,25 +358,62 @@ router.delete("/delete/:postId", verifyToken, async (req, res) => {
           deletedBy: req.userId,
           deletedByUsername: authorInfo ? authorInfo.get("username") : null,
           deletedAt: Date.now(),
+          notifIds: deletedNotifIds,
         };
         ioAll.emit("post:deleted", deletedPayload);
         console.log(
           `🔊 Emitted post:deleted for post=${req.params.postId}`,
           deletedPayload
         );
+
+        // Also emit notification:remove to relevant users so their notification lists clear immediately
+        try {
+          if (Array.isArray(deletedNotifIds) && deletedNotifIds.length > 0) {
+            // Best-effort: broadcast notification:remove with notifIds so clients can remove them locally
+            ioAll.emit("notification:remove", { notifIds: deletedNotifIds });
+            console.log(
+              `🔕 Emitted notification:remove for notifIds=${JSON.stringify(
+                deletedNotifIds
+              )}`
+            );
+          }
+        } catch (emitErr2) {
+          console.warn(
+            "Failed to emit notification:remove after post delete",
+            emitErr2
+          );
+        }
       }
     } catch (emitErr) {
       console.warn("Failed to emit post:deleted", emitErr);
     }
 
     res.json({
-      message: "✅ Đã xóa bài viết và tất cả relationships thành công!",
+      message: "✅ Đã xóa HOÀN TOÀN bài viết và TẤT CẢ dữ liệu liên quan!",
       postId: req.params.postId,
       deletedBy: authorInfo.get("username"),
+      deleted: {
+        comments: deletedCommentIds.length,
+        notifications: deletedNotifIds.length,
+        post: 1,
+      },
     });
   } catch (error) {
-    console.error("❌ Delete post error:", error);
-    res.status(500).json({ error: "Lỗi khi xóa bài viết" });
+    console.error(
+      "❌ Delete post error:",
+      error && error.stack ? error.stack : error
+    );
+    const safeMessage =
+      process.env.NODE_ENV === "production"
+        ? "Lỗi khi xóa bài viết"
+        : error && error.message
+        ? error.message
+        : "Unknown error";
+    const payload = { error: safeMessage };
+    if (process.env.NODE_ENV !== "production") {
+      payload.details = error && error.stack ? error.stack : error;
+    }
+    res.status(500).json(payload);
   } finally {
     await session.close();
   }
@@ -699,6 +850,103 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
       }
     }
 
+    // For top-level comments (no parent), notify the post author in real-time
+    try {
+      if (!parent || !parent.id) {
+        try {
+          const commenterName =
+            (author && (author.displayName || author.username)) || "Someone";
+          const message = `${commenterName} đã bình luận trên bài viết của bạn`;
+          const threadId = c.threadId || commentId;
+
+          // Find post author id
+          const authorQ = `MATCH (author:User)-[:POSTED]->(p:Post {id:$postId}) RETURN author.id AS id LIMIT 1`;
+          const authorRes = await session.run(authorQ, { postId });
+          const authorIdRaw = authorRes.records[0]
+            ? authorRes.records[0].get("id")
+            : null;
+          const postAuthorId =
+            authorIdRaw && authorIdRaw.toString
+              ? authorIdRaw.toString()
+              : authorIdRaw;
+
+          // Don't notify self
+          if (postAuthorId && String(postAuthorId) !== String(req.userId)) {
+            // Dedupe by threadId similar to reply logic
+            const notifCheckQ = `
+              MATCH (a:User {id:$authorId})-[:HAS_NOTIFICATION]->(n:Notification)-[:ABOUT]->(p:Post {id:$postId})
+              WHERE n.fromUserId = $fromUserId AND coalesce(n.threadId, '') = $threadId
+              RETURN n.id AS id, n.createdAt AS createdAt LIMIT 1
+            `;
+            const checkRes = await session.run(notifCheckQ, {
+              authorId: postAuthorId,
+              postId,
+              fromUserId: req.userId,
+              threadId,
+            });
+            let notifId;
+            let shouldEmit = true;
+            if (checkRes.records.length > 0) {
+              notifId = checkRes.records[0].get("id");
+              const existingCreated = checkRes.records[0].get("createdAt");
+              const existingMs = existingCreated
+                ? existingCreated.toNumber()
+                : 0;
+              await session.run(
+                `MATCH (n:Notification {id:$notifId}) SET n.createdAt = timestamp(), n.message = $message RETURN n.id`,
+                { notifId, message }
+              );
+              if (Date.now() - existingMs < 3000) shouldEmit = false;
+            } else {
+              notifId = uuidv4();
+              await session.run(
+                `MATCH (a:User {id:$authorId}), (p:Post {id:$postId})
+                 CREATE (n:Notification {id:$notifId, type:$type, message:$message, fromUserId:$fromUserId, fromName:$fromName, threadId:$threadId, createdAt:timestamp(), commentId:$commentId, read:false})
+                 CREATE (a)-[:HAS_NOTIFICATION]->(n)-[:ABOUT]->(p)
+                 RETURN n.id AS id`,
+                {
+                  authorId: postAuthorId,
+                  postId,
+                  notifId,
+                  type: "comment",
+                  message,
+                  fromUserId: req.userId,
+                  fromName: commenterName,
+                  threadId,
+                  commentId,
+                }
+              );
+            }
+
+            const io = req.app && req.app.locals && req.app.locals.io;
+            if (shouldEmit && io && postAuthorId) {
+              io.to(postAuthorId).emit("notification:new", {
+                type: "comment",
+                fromName: commenterName,
+                fromUserId: req.userId,
+                postId,
+                commentId,
+                message,
+                notifId,
+                threadId,
+                timestamp: Date.now(),
+              });
+              console.log(
+                `🔔 Emitted notification:new (comment) to user=${postAuthorId} (notifId=${notifId})`
+              );
+            }
+          }
+        } catch (err) {
+          console.warn(
+            "Failed to handle top-level comment notification",
+            err && err.stack ? err.stack : err
+          );
+        }
+      }
+    } catch (e) {
+      // defensive: ignore
+    }
+
     const payload = { postId, comment: { ...c, author } };
     try {
       const ioAll = req.app && req.app.locals && req.app.locals.io;
@@ -813,12 +1061,12 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
       try {
         // First, explicitly find notification ids to delete so we can log/debug
         const findQ = `
-          // Find Notification nodes either linked via an ABOUT relationship to the post
-          // or that have a postId property set to the post id. This covers older/orphan
-          // notifications that weren't created with the ABOUT relationship.
+          // Find Notification nodes of type 'like' either linked via an ABOUT relationship to the post
+          // or that have a postId property set to the post id. Restrict to type 'like' so we don't remove
+          // comment notifications when someone unlikes a post.
           MATCH (n:Notification)
           OPTIONAL MATCH (n)-[:ABOUT]->(p:Post)
-          WHERE n.fromUserId = $userId AND (p.id = $postId OR n.postId = $postId)
+          WHERE n.fromUserId = $userId AND n.type = 'like' AND (p.id = $postId OR n.postId = $postId)
           RETURN n.id AS id, n.fromUserId AS fromUserId, n.fromName AS fromName, n.createdAt AS createdAt
         `;
         const findRes = await session.run(findQ, {

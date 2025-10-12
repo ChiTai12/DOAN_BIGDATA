@@ -98,18 +98,21 @@ function Header() {
           payload.notifId ||
           `${payload.fromUserId}-${payload.postId}-${Date.now()}`;
         setNotifications((prev) => {
-          // dedupe by notifId first, then by (fromUserId+postId)
+          // dedupe by notifId first, then by (fromUserId+postId+type)
           const existsById = prev.some((n) => n.id === notifId);
           const existsByPair = prev.some(
             (n) =>
-              n.fromUserId === payload.fromUserId && n.postId === payload.postId
+              n.fromUserId === payload.fromUserId &&
+              n.postId === payload.postId &&
+              n.type === payload.type
           );
           if (existsById || existsByPair) {
             // update timestamp/message of existing notification but don't create duplicate
             return prev.map((n) =>
               n.id === notifId ||
               (n.fromUserId === payload.fromUserId &&
-                n.postId === payload.postId)
+                n.postId === payload.postId &&
+                n.type === payload.type)
                 ? {
                     ...n,
                     message: payload.message,
@@ -299,12 +302,13 @@ function Header() {
             ) {
               const idsToRemove = new Set(payload.notifIds);
               newList = prev.filter((n) => !idsToRemove.has(n.id));
-            } else if (payload.fromUserId && payload.postId) {
+            } else if (payload.fromUserId && payload.postId && payload.type) {
               newList = prev.filter(
                 (n) =>
                   !(
                     n.fromUserId === payload.fromUserId &&
-                    n.postId === payload.postId
+                    n.postId === payload.postId &&
+                    n.type === payload.type
                   )
               );
             }
@@ -689,7 +693,15 @@ function Header() {
                                     {notif.from}
                                   </span>
                                   <span className="text-gray-800">
-                                    đã thích bài viết của bạn
+                                    {notif.message
+                                      ? notif.message
+                                      : notif.type === "comment"
+                                      ? "đã bình luận vào bài viết của bạn"
+                                      : notif.type === "reply"
+                                      ? "đã trả lời bình luận của bạn"
+                                      : notif.type === "like"
+                                      ? "đã thích bài viết của bạn"
+                                      : "đã tương tác với bài viết của bạn"}
                                   </span>
                                 </p>
                                 <p className="text-xs text-gray-500 mt-1 font-['Inter',sans-serif]">

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import ReactDOM from "react-dom";
+import { createRoot } from "react-dom/client";
 
 let container = null;
 
@@ -51,7 +51,9 @@ export function mountToasts() {
   if (container) return;
   container = document.createElement("div");
   document.body.appendChild(container);
-  ReactDOM.render(<ToastContainer />, container);
+  // React 18: use createRoot instead of ReactDOM.render
+  const root = createRoot(container);
+  root.render(<ToastContainer />);
 }
 
 export default ToastContainer;

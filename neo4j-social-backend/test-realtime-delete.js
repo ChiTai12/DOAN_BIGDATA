@@ -25,6 +25,7 @@ async function ensureUser(username) {
         username,
         password: PASSWORD,
         displayName: username,
+        email: `${username}@example.com`,
       });
       return (
         await axios.post(`${BASE}/auth/login`, {
