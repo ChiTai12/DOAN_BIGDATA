@@ -6,37 +6,99 @@ const router = express.Router();
 
 // GET /notifications - return notifications for the logged in user
 router.get("/", verifyToken, async (req, res) => {
+  console.log(`🔔 GET /notifications requested by user=${req.userId}`);
   const session = driver.session();
   try {
     // Try to return persisted Notification nodes (if any). If Notification.fromName is missing
     // we resolve it from the user node.
-    const q = `
-      MATCH (me:User {id:$userId})
-      OPTIONAL MATCH (me)-[:HAS_NOTIFICATION]->(n:Notification)-[:ABOUT]->(p:Post)
-      OPTIONAL MATCH (from:User) WHERE n.fromUserId IS NOT NULL AND from.id = n.fromUserId
-      WITH n, p, from
-      WHERE n IS NOT NULL
-      RETURN n.id AS id, n.type AS type, n.message AS message,
-             coalesce(n.fromName, from.displayName, from.username) AS fromName,
-             n.fromUserId AS fromUserId, p.id AS postId, n.createdAt AS createdAt
-            , n.read AS read
-      ORDER BY n.createdAt DESC
-      LIMIT 100
-    `;
+    // Return notifications linked directly to the user via HAS_NOTIFICATION
+    // and also include "orphaned" notifications that reference this user's posts
+    // (some Notification nodes in the wild may not have HAS_NOTIFICATION relationships)
+    // Simpler approach: run two smaller queries and combine in JS to avoid union parsing issues
+    try {
+      const params = { userId: req.userId };
+      console.log("Running notifications queries with params:", params);
 
-    const result = await session.run(q, { userId: req.userId });
-    if (result.records.length > 0) {
-      const notifications = result.records.map((r) => ({
-        id: r.get("id"),
-        type: r.get("type"),
-        message: r.get("message"),
-        fromName: r.get("fromName"),
-        fromUserId: r.get("fromUserId"),
-        postId: r.get("postId"),
-        createdAt: r.get("createdAt") || Date.now(),
-        read: r.get("read") === true,
-      }));
-      return res.json(notifications);
+      const qA = `
+        MATCH (me:User {id:$userId})-[:HAS_NOTIFICATION]->(n:Notification)
+        OPTIONAL MATCH (n)-[:ABOUT]->(p:Post)
+        OPTIONAL MATCH (from:User) WHERE n.fromUserId IS NOT NULL AND from.id = n.fromUserId
+        WITH me, n, p, from
+        WHERE n IS NOT NULL
+          AND NOT (n.fromUserId IS NOT NULL AND n.fromUserId = $userId)
+          AND NOT (coalesce(n.fromName, '') IN [coalesce(me.displayName, ''), coalesce(me.username, '')])
+        RETURN n.id AS id, n.type AS type, n.message AS message,
+          coalesce(n.fromName, from.displayName, from.username) AS fromName,
+          n.fromUserId AS fromUserId, p.id AS postId, n.commentId AS commentId, n.threadId AS threadId, n.commentText AS commentText, n.createdAt AS createdAt,
+          n.read AS read
+      `;
+
+      const qB = `
+        MATCH (me2:User {id:$userId})-[:POSTED]->(p2:Post)<-[:ABOUT]-(n2:Notification)
+        OPTIONAL MATCH (from2:User) WHERE n2.fromUserId IS NOT NULL AND from2.id = n2.fromUserId
+        WITH me2, n2, p2, from2
+        WHERE NOT (n2.fromUserId IS NOT NULL AND n2.fromUserId = $userId)
+          AND NOT (coalesce(n2.fromName, '') IN [coalesce(me2.displayName, ''), coalesce(me2.username, '')])
+        RETURN n2.id AS id, n2.type AS type, n2.message AS message,
+          coalesce(n2.fromName, from2.displayName, from2.username) AS fromName,
+          n2.fromUserId AS fromUserId, p2.id AS postId, n2.commentId AS commentId, n2.threadId AS threadId, n2.commentText AS commentText, n2.createdAt AS createdAt,
+          n2.read AS read
+      `;
+
+      const resA = await session.run(qA, params);
+      const resB = await session.run(qB, params);
+
+      const records = [...resA.records, ...resB.records];
+      if (records.length > 0) {
+        const notifications = records.map((r) => {
+          const rawCreated = r.get("createdAt");
+          let ts = null;
+          try {
+            if (
+              rawCreated != null &&
+              typeof rawCreated === "object" &&
+              typeof rawCreated.toNumber === "function"
+            ) {
+              ts = rawCreated.toNumber();
+            } else if (rawCreated != null) {
+              const num = Number(rawCreated);
+              if (!Number.isNaN(num) && Number.isFinite(num)) ts = num;
+            }
+          } catch (e) {
+            ts = null;
+          }
+          return {
+            id: r.get("id"),
+            type: r.get("type"),
+            message: r.get("message"),
+            fromName: r.get("fromName"),
+            fromUserId: r.get("fromUserId"),
+            postId: r.get("postId"),
+            commentId: r.get("commentId"),
+            threadId: r.get("threadId"),
+            commentText: r.get("commentText"),
+            createdAt: rawCreated == null ? null : rawCreated,
+            timestamp: ts,
+            timeString: ts ? new Date(ts).toLocaleString("vi-VN") : null,
+            read: r.get("read") === true,
+          };
+        });
+
+        notifications.sort((a, b) => {
+          if (a.timestamp == null && b.timestamp == null) return 0;
+          if (a.timestamp == null) return 1;
+          if (b.timestamp == null) return -1;
+          return Number(b.timestamp) - Number(a.timestamp);
+        });
+
+        return res.json(notifications.slice(0, 100));
+      }
+    } catch (qerr) {
+      console.error("Notifications queries failed");
+      try {
+        console.error("Query error:", qerr.stack || qerr);
+      } catch (e) {}
+      throw qerr;
     }
 
     // Fallback: if there are no persisted Notification nodes, synthesize notifications
@@ -55,12 +117,34 @@ router.get("/", verifyToken, async (req, res) => {
       fromName: r.get("fromName"),
       fromUserId: r.get("fromUserId"),
       postId: r.get("postId"),
-      createdAt: r.get("createdAt") || Date.now(),
+      commentId: null,
+      threadId: null,
+      commentText: null,
+      createdAt: r.get("createdAt") || null,
     }));
-    return res.json(synthetic);
+    const normalized = synthetic.map((n) => ({
+      ...n,
+      timestamp: n.createdAt
+        ? typeof n.createdAt === "object" &&
+          typeof n.createdAt.toNumber === "function"
+          ? n.createdAt.toNumber()
+          : Number(n.createdAt)
+        : null,
+    }));
+    normalized.sort(
+      (a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0)
+    );
+    return res.json(normalized.slice(0, 100));
   } catch (err) {
     console.error("Failed to load notifications", err);
-    res.status(500).json({ error: "Failed to load notifications" });
+    try {
+      console.error(err.stack || err);
+    } catch (e) {}
+    // For debugging return error details (temporary)
+    return res.status(500).json({
+      error: "Failed to load notifications",
+      detail: err.stack || err.message || String(err),
+    });
   } finally {
     await session.close();
   }

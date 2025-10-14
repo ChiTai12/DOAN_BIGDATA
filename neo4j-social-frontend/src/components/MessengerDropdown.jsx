@@ -16,6 +16,34 @@ function MessengerDropdown({ isOpen, onClose, onStartChat }) {
     }
   }, [isOpen]);
 
+  // Update users list when someone updates their profile elsewhere
+  useEffect(() => {
+    function onUserUpdated(e) {
+      const payload = e.detail || e;
+      if (!payload || !payload.user) return;
+      const updated = payload.user;
+      setUsers((prev) =>
+        prev.map((u) => {
+          try {
+            if (!u) return u;
+            if (u.id && updated.id && String(u.id) === String(updated.id))
+              return { ...u, ...updated };
+            if (
+              u.username &&
+              updated.username &&
+              String(u.username) === String(updated.username)
+            )
+              return { ...u, ...updated };
+          } catch (err) {}
+          return u;
+        })
+      );
+    }
+
+    window.addEventListener("app:user:updated", onUserUpdated);
+    return () => window.removeEventListener("app:user:updated", onUserUpdated);
+  }, []);
+
   useEffect(() => {
     function handleClickOutside(event) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {

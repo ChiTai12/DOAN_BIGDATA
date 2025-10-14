@@ -227,6 +227,17 @@ router.put("/test-update/:userId", async (req, res) => {
     const user = result.records[0].get("u").properties;
     delete user.passwordHash;
     console.log("✅ Updated user:", user);
+    // Emit user:updated so other clients receive the change in real-time (useful for testing)
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      if (io) io.emit("user:updated", { user });
+    } catch (emitErr) {
+      console.warn(
+        "Failed to emit user:updated from test-update route",
+        emitErr
+      );
+    }
+
     res.json(user);
   } catch (error) {
     console.error("❌ Test update error:", error);
@@ -287,6 +298,16 @@ router.put("/update", verifyToken, async (req, res) => {
 
     const user = result.records[0].get("u").properties;
     delete user.passwordHash;
+    // Emit real-time update so other connected clients can refresh cached profiles
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      if (io) {
+        io.emit("user:updated", { user });
+      }
+    } catch (emitErr) {
+      console.warn("Failed to emit user:updated", emitErr);
+    }
+
     console.log("🎯 Returning updated user:", user);
     res.json(user);
   } catch (error) {
@@ -368,6 +389,17 @@ router.post(
 
       const user = result.records[0].get("u").properties;
       delete user.passwordHash;
+      // Emit user update so other connected clients refresh profile in real-time
+      try {
+        const io = req.app && req.app.locals && req.app.locals.io;
+        if (io) io.emit("user:updated", { user });
+      } catch (emitErr) {
+        console.warn(
+          "Failed to emit user:updated after avatar upload",
+          emitErr
+        );
+      }
+
       res.json({ avatarUrl: filePath, user });
     } finally {
       await session.close();

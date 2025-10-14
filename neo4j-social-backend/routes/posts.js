@@ -751,23 +751,21 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
     const parent =
       parentNode && parentNode.properties ? parentNode.properties : null;
 
-    // If parent exists (returned from create query), ensure user->user REPLIED_TO and create/update notification using threadId
+    // If parent exists (reply case): ensure REPLIED_TO relationship and notify parent author (skip self)
     if (parent && parent.id) {
       try {
-        // create a relationship between the replying user and the parent comment's author for analytics or quick lookup
         await session.run(
           `MATCH (u:User {id:$userId}), (parentAuthor:User)-[:COMMENTED]->(parent:Comment {id:$parentId}) MERGE (u)-[:REPLIED_TO]->(parentAuthor) RETURN u, parentAuthor`,
           { userId: req.userId, parentId }
         );
         console.log(`✅ Created/ensured REPLIED_TO relationship for users`);
 
-        // Notification: dedupe by threadId
         const threadId = c.threadId || parent.id || commentId;
         const replierName =
           (author && (author.displayName || author.username)) || "Someone";
         const message = `${replierName} đã trả lời bình luận của bạn`;
 
-        // Try to find parent author id
+        // Find parent author id
         const parentAuthorQ = `MATCH (parentAuthor:User)-[:COMMENTED]->(parent:Comment {id:$parentId}) RETURN parentAuthor.id AS id LIMIT 1`;
         const parentRes = await session.run(parentAuthorQ, { parentId });
         const parentAuthorIdRaw = parentRes.records[0]
@@ -778,71 +776,108 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
             ? parentAuthorIdRaw.toString()
             : parentAuthorIdRaw;
 
-        if (parentAuthorId && String(parentAuthorId) !== String(req.userId)) {
-          // check existing notification by threadId
-          const notifCheckQ = `
-            MATCH (pa:User {id:$parentAuthorId})-[:HAS_NOTIFICATION]->(n:Notification)-[:ABOUT]->(p:Post {id:$postId})
-            WHERE n.fromUserId = $fromUserId AND coalesce(n.threadId, '') = $threadId
-            RETURN n.id AS id, n.createdAt AS createdAt LIMIT 1
-          `;
-          const checkRes = await session.run(notifCheckQ, {
-            parentAuthorId,
-            postId,
-            fromUserId: req.userId,
-            threadId,
-          });
-          let notifId;
-          let shouldEmit = true;
-          if (checkRes.records.length > 0) {
-            notifId = checkRes.records[0].get("id");
-            const existingCreated = checkRes.records[0].get("createdAt");
-            const existingMs = existingCreated ? existingCreated.toNumber() : 0;
-            await session.run(
-              `MATCH (n:Notification {id:$notifId}) SET n.createdAt = timestamp(), n.message = $message RETURN n.id`,
-              { notifId, message }
-            );
-            if (Date.now() - existingMs < 3000) shouldEmit = false;
-          } else {
-            notifId = uuidv4();
-            await session.run(
-              `MATCH (pa:User {id:$parentAuthorId}), (p:Post {id:$postId})
-               CREATE (n:Notification {id:$notifId, type:$type, message:$message, fromUserId:$fromUserId, fromName:$fromName, threadId:$threadId, createdAt:timestamp(), commentId:$commentId, read:false})
-               CREATE (pa)-[:HAS_NOTIFICATION]->(n)-[:ABOUT]->(p)
-               RETURN n.id AS id`,
-              {
-                parentAuthorId,
-                postId,
-                notifId,
-                type: "reply",
-                message,
-                fromUserId: req.userId,
-                fromName: replierName,
-                threadId,
-                commentId,
-              }
-            );
-          }
+        if (parentAuthorId) {
+          const recipientId =
+            parentAuthorId && parentAuthorId.toString
+              ? parentAuthorId.toString()
+              : parentAuthorId;
+          const actorId =
+            req.userId && req.userId.toString
+              ? req.userId.toString()
+              : req.userId;
+          if (recipientId !== actorId) {
+            const notifId = uuidv4();
+            try {
+              await session.run(
+                `MATCH (pa:User {id:$parentAuthorId}), (p:Post {id:$postId})
+                 CREATE (n:Notification {id:$notifId, type:$type, message:$message, fromUserId:$fromUserId, fromName:$fromName, threadId:$threadId, createdAt:timestamp(), commentId:$commentId, commentText:$commentText, read:false})
+                 CREATE (pa)-[:HAS_NOTIFICATION]->(n)-[:ABOUT]->(p)
+                 RETURN n.id AS id`,
+                {
+                  parentAuthorId,
+                  postId,
+                  notifId,
+                  type: "reply",
+                  message,
+                  fromUserId: req.userId,
+                  fromName: replierName,
+                  threadId,
+                  commentId,
+                  commentText: content,
+                }
+              );
 
-          const io = req.app && req.app.locals && req.app.locals.io;
-          if (shouldEmit && io && parentAuthorId) {
-            io.to(parentAuthorId).emit("notification:new", {
-              type: "reply",
-              fromName: replierName,
-              fromUserId: req.userId,
-              postId,
-              commentId,
-              message,
-              notifId,
-              threadId,
-              timestamp: Date.now(),
-            });
+              try {
+                const io = req.app && req.app.locals && req.app.locals.io;
+                const userSockets =
+                  req.app && req.app.locals && req.app.locals.userSockets;
+                if (io) {
+                  // If we have userSockets map, send to recipient sockets except actor sockets
+                  if (userSockets && userSockets.has(parentAuthorId)) {
+                    const recipientSockets = Array.from(
+                      userSockets.get(parentAuthorId)
+                    );
+                    const actorSockets = new Set(
+                      userSockets.get(req.userId) || []
+                    );
+                    recipientSockets.forEach((sId) => {
+                      if (!actorSockets.has(sId)) {
+                        const emitTs = Date.now();
+                        io.to(sId).emit("notification:new", {
+                          type: "reply",
+                          fromName: replierName,
+                          fromUserId: req.userId,
+                          postId,
+                          commentId,
+                          message,
+                          commentText: content,
+                          notifId,
+                          threadId,
+                          timestamp: emitTs,
+                          timeString: new Date(emitTs).toLocaleString("vi-VN"),
+                        });
+                      }
+                    });
+                  } else {
+                    // fallback to room emit
+                    const emitTs = Date.now();
+                    io.to(parentAuthorId).emit("notification:new", {
+                      type: "reply",
+                      fromName: replierName,
+                      fromUserId: req.userId,
+                      postId,
+                      commentId,
+                      message,
+                      commentText: content,
+                      notifId,
+                      threadId,
+                      timestamp: emitTs,
+                      timeString: new Date(emitTs).toLocaleString("vi-VN"),
+                    });
+                  }
+                  console.log(
+                    `🔔 Emitted notification:new (reply) to user=${parentAuthorId} (notifId=${notifId})`
+                  );
+                }
+              } catch (emitErr) {
+                console.warn(
+                  "Failed to emit notification:new (reply)",
+                  emitErr
+                );
+              }
+            } catch (createErr) {
+              console.warn(
+                "Failed to create notification node for reply",
+                createErr
+              );
+            }
+          } else {
             console.log(
-              `🔔 Emitted notification:new (reply) to user=${parentAuthorId} (notifId=${notifId})`
+              `Skipping notification for reply because recipient (parentAuthor=${recipientId}) is the actor`
             );
           }
         }
       } catch (err) {
-        // Log full stack for debugging purposes
         console.warn(
           "Failed to handle parent reply/notification",
           err && err.stack ? err.stack : err
@@ -850,58 +885,39 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
       }
     }
 
-    // For top-level comments (no parent), notify the post author in real-time
-    try {
-      if (!parent || !parent.id) {
-        try {
-          const commenterName =
-            (author && (author.displayName || author.username)) || "Someone";
-          const message = `${commenterName} đã bình luận trên bài viết của bạn`;
-          const threadId = c.threadId || commentId;
+    // Top-level comment: notify post author (skip self)
+    if (!parent || !parent.id) {
+      try {
+        const commenterName =
+          (author && (author.displayName || author.username)) || "Someone";
+        const message = `${commenterName} đã bình luận trên bài viết của bạn`;
+        const threadId = c.threadId || commentId;
 
-          // Find post author id
-          const authorQ = `MATCH (author:User)-[:POSTED]->(p:Post {id:$postId}) RETURN author.id AS id LIMIT 1`;
-          const authorRes = await session.run(authorQ, { postId });
-          const authorIdRaw = authorRes.records[0]
-            ? authorRes.records[0].get("id")
-            : null;
-          const postAuthorId =
-            authorIdRaw && authorIdRaw.toString
-              ? authorIdRaw.toString()
-              : authorIdRaw;
+        const authorQ = `MATCH (author:User)-[:POSTED]->(p:Post {id:$postId}) RETURN author.id AS id LIMIT 1`;
+        const authorRes = await session.run(authorQ, { postId });
+        const authorIdRaw = authorRes.records[0]
+          ? authorRes.records[0].get("id")
+          : null;
+        const postAuthorId =
+          authorIdRaw && authorIdRaw.toString
+            ? authorIdRaw.toString()
+            : authorIdRaw;
 
-          // Don't notify self
-          if (postAuthorId && String(postAuthorId) !== String(req.userId)) {
-            // Dedupe by threadId similar to reply logic
-            const notifCheckQ = `
-              MATCH (a:User {id:$authorId})-[:HAS_NOTIFICATION]->(n:Notification)-[:ABOUT]->(p:Post {id:$postId})
-              WHERE n.fromUserId = $fromUserId AND coalesce(n.threadId, '') = $threadId
-              RETURN n.id AS id, n.createdAt AS createdAt LIMIT 1
-            `;
-            const checkRes = await session.run(notifCheckQ, {
-              authorId: postAuthorId,
-              postId,
-              fromUserId: req.userId,
-              threadId,
-            });
-            let notifId;
-            let shouldEmit = true;
-            if (checkRes.records.length > 0) {
-              notifId = checkRes.records[0].get("id");
-              const existingCreated = checkRes.records[0].get("createdAt");
-              const existingMs = existingCreated
-                ? existingCreated.toNumber()
-                : 0;
-              await session.run(
-                `MATCH (n:Notification {id:$notifId}) SET n.createdAt = timestamp(), n.message = $message RETURN n.id`,
-                { notifId, message }
-              );
-              if (Date.now() - existingMs < 3000) shouldEmit = false;
-            } else {
-              notifId = uuidv4();
+        if (postAuthorId) {
+          const recipientId =
+            postAuthorId && postAuthorId.toString
+              ? postAuthorId.toString()
+              : postAuthorId;
+          const actorId =
+            req.userId && req.userId.toString
+              ? req.userId.toString()
+              : req.userId;
+          if (recipientId !== actorId) {
+            const notifId = uuidv4();
+            try {
               await session.run(
                 `MATCH (a:User {id:$authorId}), (p:Post {id:$postId})
-                 CREATE (n:Notification {id:$notifId, type:$type, message:$message, fromUserId:$fromUserId, fromName:$fromName, threadId:$threadId, createdAt:timestamp(), commentId:$commentId, read:false})
+                 CREATE (n:Notification {id:$notifId, type:$type, message:$message, fromUserId:$fromUserId, fromName:$fromName, threadId:$threadId, createdAt:timestamp(), commentId:$commentId, commentText:$commentText, read:false})
                  CREATE (a)-[:HAS_NOTIFICATION]->(n)-[:ABOUT]->(p)
                  RETURN n.id AS id`,
                 {
@@ -914,37 +930,84 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
                   fromName: commenterName,
                   threadId,
                   commentId,
+                  commentText: content,
                 }
               );
-            }
 
-            const io = req.app && req.app.locals && req.app.locals.io;
-            if (shouldEmit && io && postAuthorId) {
-              io.to(postAuthorId).emit("notification:new", {
-                type: "comment",
-                fromName: commenterName,
-                fromUserId: req.userId,
-                postId,
-                commentId,
-                message,
-                notifId,
-                threadId,
-                timestamp: Date.now(),
-              });
-              console.log(
-                `🔔 Emitted notification:new (comment) to user=${postAuthorId} (notifId=${notifId})`
+              try {
+                const io = req.app && req.app.locals && req.app.locals.io;
+                const userSockets =
+                  req.app && req.app.locals && req.app.locals.userSockets;
+                if (io) {
+                  if (userSockets && userSockets.has(postAuthorId)) {
+                    const recipientSockets = Array.from(
+                      userSockets.get(postAuthorId)
+                    );
+                    const actorSockets = new Set(
+                      userSockets.get(req.userId) || []
+                    );
+                    recipientSockets.forEach((sId) => {
+                      if (!actorSockets.has(sId)) {
+                        const emitTs = Date.now();
+                        io.to(sId).emit("notification:new", {
+                          type: "comment",
+                          fromName: commenterName,
+                          fromUserId: req.userId,
+                          postId,
+                          commentId,
+                          message,
+                          commentText: content,
+                          notifId,
+                          threadId,
+                          timestamp: emitTs,
+                          timeString: new Date(emitTs).toLocaleString("vi-VN"),
+                        });
+                      }
+                    });
+                  } else {
+                    const emitTs = Date.now();
+                    io.to(postAuthorId).emit("notification:new", {
+                      type: "comment",
+                      fromName: commenterName,
+                      fromUserId: req.userId,
+                      postId,
+                      commentId,
+                      message,
+                      commentText: content,
+                      notifId,
+                      threadId,
+                      timestamp: emitTs,
+                      timeString: new Date(emitTs).toLocaleString("vi-VN"),
+                    });
+                  }
+                  console.log(
+                    `🔔 Emitted notification:new (comment) to user=${postAuthorId} (notifId=${notifId})`
+                  );
+                }
+              } catch (emitErr) {
+                console.warn(
+                  "Failed to emit notification:new (comment)",
+                  emitErr
+                );
+              }
+            } catch (createErr) {
+              console.warn(
+                "Failed to create notification node for comment",
+                createErr
               );
             }
+          } else {
+            console.log(
+              `Skipping notification for comment because recipient (postAuthor=${recipientId}) is the actor`
+            );
           }
-        } catch (err) {
-          console.warn(
-            "Failed to handle top-level comment notification",
-            err && err.stack ? err.stack : err
-          );
         }
+      } catch (err) {
+        console.warn(
+          "Failed to handle top-level comment notification",
+          err && err.stack ? err.stack : err
+        );
       }
-    } catch (e) {
-      // defensive: ignore
     }
 
     const payload = { postId, comment: { ...c, author } };
@@ -1224,7 +1287,7 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
               // Check if a notification from this liker for this post already exists
               const checkQ = `
                 MATCH (author:User {id:$authorId})-[:HAS_NOTIFICATION]->(n:Notification)-[:ABOUT]->(p:Post {id:$postId})
-                WHERE n.fromUserId = $fromUserId
+                WHERE n.fromUserId = $fromUserId AND n.type = 'like'
                 RETURN n.id AS id, n.createdAt AS createdAt
               `;
               const checkRes = await session.run(checkQ, {
@@ -1242,8 +1305,8 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
                   ? existingCreated.toNumber()
                   : 0;
                 await session.run(
-                  `MATCH (n:Notification {id:$notifId}) SET n.createdAt = timestamp(), n.message = $message RETURN n.id`,
-                  { notifId, message }
+                  `MATCH (n:Notification {id:$notifId}) SET n.createdAt = timestamp(), n.message = $message, n.type = $type RETURN n.id`,
+                  { notifId, message, type: "like" }
                 );
                 // rate-limit: if previous notification was created very recently, avoid emitting again
                 if (Date.now() - existingMs < 5000) {
@@ -1270,6 +1333,7 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
 
               const io = req.app.locals.io;
               if (shouldEmit && io && authorId) {
+                const emitTs = Date.now();
                 io.to(authorId).emit("notification:new", {
                   type: "like",
                   fromName: likerName,
@@ -1277,7 +1341,8 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
                   postId: req.params.postId,
                   message,
                   notifId,
-                  timestamp: Date.now(),
+                  timestamp: emitTs,
+                  timeString: new Date(emitTs).toLocaleString("vi-VN"),
                 });
                 console.log(
                   `🔔 Emitted notification:new to user=${authorId} for post=${req.params.postId} from ${likerName} (notifId=${notifId})`

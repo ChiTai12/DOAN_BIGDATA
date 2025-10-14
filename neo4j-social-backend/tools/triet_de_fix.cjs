@@ -1,9 +1,32 @@
-const neo4j = require("neo4j-driver");
+const dotenv = require("dotenv");
+dotenv.config();
 
-const driver = neo4j.driver(
-  "neo4j://localhost:7687",
-  neo4j.auth.basic("neo4j", "password")
-);
+// Use the project's configured driver if available (ES module). This avoids duplicating credentials.
+let driver;
+
+async function getDriver() {
+  if (driver) return driver;
+  try {
+    // dynamic import of ESM module
+    const module = await import("../db/driver.js");
+    driver = module.default;
+    return driver;
+  } catch (e) {
+    console.warn(
+      "Failed to import ../db/driver.js, falling back to local neo4j-driver config",
+      e
+    );
+    const neo4j = require("neo4j-driver");
+    const NEO4J_URI = process.env.NEO4J_URI || "neo4j://localhost:7687";
+    const NEO4J_USER = process.env.NEO4J_USER || "neo4j";
+    const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD || "password";
+    driver = neo4j.driver(
+      NEO4J_URI,
+      neo4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD)
+    );
+    return driver;
+  }
+}
 
 async function triethoDeFix() {
   const session = driver.session();

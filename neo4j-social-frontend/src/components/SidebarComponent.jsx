@@ -94,11 +94,69 @@ const SidebarComponent = () => {
 
     window.addEventListener("app:user:follow", onFollow);
     window.addEventListener("app:user:unfollow", onUnfollow);
+    // Update suggestions and sidebar display when any user's profile is updated
+    const onUserUpdated = (e) => {
+      try {
+        const payload = e.detail || e;
+        if (!payload || !payload.user) return;
+        const updated = payload.user;
+        // Update suggestions list entries if the updated user appears there
+        setSuggestions((prev) => {
+          if (!Array.isArray(prev) || prev.length === 0) return prev;
+          return prev.map((s) => {
+            try {
+              if (!s) return s;
+              if (s.id && updated.id && String(s.id) === String(updated.id)) {
+                return { ...s, ...updated };
+              }
+              // also match by username fallback
+              if (
+                s.username &&
+                updated.username &&
+                String(s.username) === String(updated.username)
+              ) {
+                return { ...s, ...updated };
+              }
+            } catch (err) {}
+            return s;
+          });
+        });
+      } catch (err) {
+        console.warn("Sidebar failed to process app:user:updated", err);
+      }
+    };
+    // New user created elsewhere — prepend to suggestions if not current user
+    const onUserCreated = (e) => {
+      try {
+        const payload = e.detail || e;
+        if (!payload || !payload.user) return;
+        const newUser = payload.user;
+        console.log(
+          "Sidebar received app:user:created:",
+          newUser && newUser.username,
+          newUser && newUser.id
+        );
+        // ignore if this is the current user
+        if (user && newUser && String(newUser.id) === String(user.id)) return;
+        // refresh suggestions from server so server-side filters/order are respected
+        try {
+          fetchSuggestions();
+        } catch (err) {
+          console.warn("Failed to refresh suggestions after user:created", err);
+        }
+      } catch (err) {
+        console.warn("Sidebar failed to process app:user:created", err);
+      }
+    };
+    window.addEventListener("app:user:updated", onUserUpdated);
+    window.addEventListener("app:user:created", onUserCreated);
     return () => {
       cancelled = true;
       controller.aborted = true;
       window.removeEventListener("app:user:follow", onFollow);
       window.removeEventListener("app:user:unfollow", onUnfollow);
+      window.removeEventListener("app:user:updated", onUserUpdated);
+      window.removeEventListener("app:user:created", onUserCreated);
     };
   }, [user?.id, updateTrigger]); // Re-fetch when updateTrigger changes
 

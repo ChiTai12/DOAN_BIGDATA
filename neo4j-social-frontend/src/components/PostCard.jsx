@@ -12,7 +12,7 @@ function renderIcons(icon) {
   // already an array
   if (Array.isArray(icon)) {
     return (
-      <span className="flex items-center gap-1">
+      <span className="inline-flex items-center gap-1 flex-shrink-0">
         {icon.map((s, i) => (
           <span key={i} className="text-lg">
             {s}
@@ -29,7 +29,7 @@ function renderIcons(icon) {
       .filter(Boolean);
     if (arr.length === 0) return null;
     return (
-      <span className="flex items-center gap-1">
+      <span className="inline-flex items-center gap-1 flex-shrink-0">
         {arr.map((s, i) => (
           <span key={i} className="text-lg">
             {s}
@@ -39,7 +39,11 @@ function renderIcons(icon) {
     );
   }
   // fallback: single string
-  return <span className="text-lg">{icon}</span>;
+  return (
+    <span className="inline-flex items-center gap-1 text-lg flex-shrink-0">
+      {icon}
+    </span>
+  );
 }
 
 // Normalize different shapes of comment payloads from API / realtime events
@@ -54,6 +58,18 @@ const normalizeComment = (raw) => {
   // already in { comment: {...}, author: {...} } - coerce ids
   if (raw.comment && raw.author) {
     const inner = raw.comment;
+    const coerceAuthor = (a) => {
+      if (!a) return {};
+      const rawId = a.id ?? a.userId ?? a._id ?? "";
+      const idStr =
+        rawId == null
+          ? ""
+          : typeof rawId === "object" && typeof rawId.toNumber === "function"
+          ? String(rawId.toNumber())
+          : String(rawId);
+      return { ...a, id: idStr };
+    };
+
     return {
       comment: {
         id: toPrimitiveId(
@@ -68,7 +84,7 @@ const normalizeComment = (raw) => {
         parentId: toPrimitiveId(inner.parentId || inner.parent || null),
         icon: inner.icon || "",
       },
-      author: raw.author,
+      author: coerceAuthor(raw.author),
       parent: raw.parent || null, // Backend trả về parent info
     };
   }
@@ -84,7 +100,10 @@ const normalizeComment = (raw) => {
         parentId: toPrimitiveId(raw.parentId || raw.parent || null),
         icon: raw.icon || "",
       },
-      author,
+      // coerce author id to string when present
+      author: author
+        ? { ...author, id: author.id ? String(author.id) : author.id }
+        : {},
     };
   }
   // shape: { comment: { id, content, createdAt, author? } }
@@ -99,7 +118,18 @@ const normalizeComment = (raw) => {
           parentId: toPrimitiveId(inner.parentId || inner.parent || null),
           icon: inner.icon || "",
         },
-        author: inner.author,
+        author: (function () {
+          const a = inner.author || {};
+          const rawId = a.id ?? a.userId ?? a._id ?? "";
+          const idStr =
+            rawId == null
+              ? ""
+              : typeof rawId === "object" &&
+                typeof rawId.toNumber === "function"
+              ? String(rawId.toNumber())
+              : String(rawId);
+          return { ...a, id: idStr };
+        })(),
       };
     return {
       comment: {
@@ -125,30 +155,7 @@ function InlineComposer({ postId, parentId, onPosted, onCancel }) {
   const inlineButtonRef = useRef(null);
   const [pickerPosLocal, setPickerPosLocal] = useState(null);
   const inlinePickerRef = useRef(null);
-
-  const insertEmoji = (sym) => {
-    setSelectedIconLocal(sym);
-    if (ref.current && typeof ref.current.selectionStart === "number") {
-      const s = ref.current.selectionStart;
-      const e = ref.current.selectionEnd;
-      const nt = text.slice(0, s) + sym + text.slice(e);
-      setText(nt);
-      requestAnimationFrame(() => {
-        try {
-          ref.current.focus();
-          const pos = s + sym.length;
-          ref.current.setSelectionRange(pos, pos);
-        } catch (e) {}
-      });
-    } else setText((t) => t + sym);
-  };
-
-  useEffect(() => {
-    try {
-      if (ref.current) ref.current.focus();
-    } catch (e) {}
-  }, []);
-
+  const [pickerAboveLocal, setPickerAboveLocal] = useState(false);
   useEffect(() => {
     function onDocClick(e) {
       if (
@@ -161,6 +168,38 @@ function InlineComposer({ postId, parentId, onPosted, onCancel }) {
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
   }, []);
+
+  // Keep inline picker attached to button on scroll/resize while open
+  useEffect(() => {
+    if (!pickerOpenLocal) return;
+    function update() {
+      try {
+        const r = inlineButtonRef.current.getBoundingClientRect();
+        const pickerWidth = 320;
+        let left = r.left + r.width / 2 - pickerWidth / 2;
+        const margin = 8;
+        left = Math.max(
+          margin,
+          Math.min(left, window.innerWidth - pickerWidth - margin)
+        );
+        if (pickerAboveLocal) {
+          const bottom = window.innerHeight - r.top + 8;
+          setPickerPosLocal({ left, bottom });
+        } else {
+          const top = r.bottom + 8;
+          setPickerPosLocal({ left, top });
+        }
+      } catch (err) {}
+    }
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    // also update once immediately
+    update();
+    return () => {
+      window.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [pickerOpenLocal, pickerAboveLocal]);
 
   return (
     <form
@@ -227,13 +266,27 @@ function InlineComposer({ postId, parentId, onPosted, onCancel }) {
                 }
                 try {
                   const r = inlineButtonRef.current.getBoundingClientRect();
-                  const width = Math.min(384, window.innerWidth * 0.9);
-                  let left = r.left;
-                  // keep inside viewport
-                  if (left + width > window.innerWidth)
-                    left = window.innerWidth - width - 8;
-                  const top = r.bottom + 8;
-                  setPickerPosLocal({ top, left, width });
+                  const estHeight = Math.min(window.innerHeight * 0.6, 360);
+                  const spaceBelow = window.innerHeight - r.bottom;
+                  const willOpenAbove = spaceBelow < estHeight + 16;
+                  setPickerAboveLocal(willOpenAbove);
+
+                  const pickerWidth = 320;
+                  let left = r.left + r.width / 2 - pickerWidth / 2;
+                  const margin = 8;
+                  left = Math.max(
+                    margin,
+                    Math.min(left, window.innerWidth - pickerWidth - margin)
+                  );
+
+                  if (willOpenAbove) {
+                    const bottom = window.innerHeight - r.top + 8;
+                    setPickerPosLocal({ left, bottom });
+                  } else {
+                    const top = r.bottom + 8;
+                    setPickerPosLocal({ left, top });
+                  }
+
                   setPickerOpenLocal(true);
                 } catch (err) {
                   setPickerOpenLocal((s) => !s);
@@ -244,16 +297,26 @@ function InlineComposer({ postId, parentId, onPosted, onCancel }) {
             >
               {selectedIconLocal || "😊"}
             </button>
-            {pickerOpenLocal && pickerPosLocal && (
+            {pickerOpenLocal && (
               <div
                 ref={inlinePickerRef}
-                className="fixed bg-white border border-gray-200 rounded-md shadow-lg p-3"
+                className={
+                  "bg-white border border-gray-200 rounded-md shadow-lg p-3 z-50"
+                }
                 style={{
-                  top: pickerPosLocal.top + "px",
-                  left: pickerPosLocal.left + "px",
-                  width: pickerPosLocal.width + "px",
+                  position: "fixed",
+                  width: "320px",
                   maxHeight: "60vh",
-                  zIndex: 9999,
+                  overflow: "visible",
+                  ...(pickerPosLocal?.left != null
+                    ? { left: `${pickerPosLocal.left}px` }
+                    : {}),
+                  ...(pickerPosLocal?.top != null
+                    ? { top: `${pickerPosLocal.top}px` }
+                    : {}),
+                  ...(pickerPosLocal?.bottom != null
+                    ? { bottom: `${pickerPosLocal.bottom}px` }
+                    : {}),
                 }}
               >
                 <div className="text-sm font-medium text-gray-700 mb-2">
@@ -327,11 +390,14 @@ function PostCard({ post, author, onDelete }) {
   const bottomPickerRef = useRef(null);
   const bottomButtonRef = useRef(null);
   const [pickerPos, setPickerPos] = useState(null);
+  const [pickerAbove, setPickerAbove] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [replyTarget, setReplyTarget] = useState(null); // { id, authorName }
   const [inlineReplyTarget, setInlineReplyTarget] = useState(null); // comment id for inline composer
   const [replyCanceled, setReplyCanceled] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  // Keep a local copy of author so we can patch it in realtime when profile updates arrive
+  const [localAuthor, setLocalAuthor] = useState(author || {});
 
   // Normalize different shapes of comment payloads from API / realtime events
   const normalizeComment = (raw) => {
@@ -500,7 +566,15 @@ function PostCard({ post, author, onDelete }) {
       if (!payload || payload.postId !== post.id) return;
       const normalized = normalizeComment(payload.comment);
       if (!normalized) return;
-      setComments((prev) => [...prev, normalized]);
+      setComments((prev) => {
+        try {
+          const exists = prev.some(
+            (c) => String(c.comment.id) === String(normalized.comment.id)
+          );
+          if (exists) return prev; // avoid duplicates
+        } catch (err) {}
+        return [normalized, ...prev]; // prepend so newest appears immediately
+      });
     };
     window.addEventListener("app:post:commented", onComment);
     // Listen for user profile updates so we can patch author info in comments
@@ -511,8 +585,24 @@ function PostCard({ post, author, onDelete }) {
       setComments((prev) =>
         prev.map((c) => {
           try {
-            if (c.author && c.author.id === updated.id) {
+            const existingId =
+              c.author && c.author.id ? String(c.author.id) : "";
+            const updatedId = updated && updated.id ? String(updated.id) : "";
+            if (existingId && updatedId && existingId === updatedId) {
               return { ...c, author: { ...c.author, ...updated } };
+            }
+            // also update parent.author if present
+            if (c.parent && c.parent.author) {
+              const pId = c.parent.author.id ? String(c.parent.author.id) : "";
+              if (pId && updatedId && pId === updatedId) {
+                return {
+                  ...c,
+                  parent: {
+                    ...c.parent,
+                    author: { ...c.parent.author, ...updated },
+                  },
+                };
+              }
             }
           } catch (err) {}
           return c;
@@ -526,6 +616,25 @@ function PostCard({ post, author, onDelete }) {
       window.removeEventListener("app:user:updated", onUserUpdated);
     };
   }, [post.id, user]);
+
+  // listen for global user updates to refresh the post author display in realtime
+  useEffect(() => {
+    function onUserUpdated(e) {
+      const payload = e.detail || e;
+      if (!payload || !payload.user) return;
+      const updated = payload.user;
+      try {
+        const existingId =
+          localAuthor && localAuthor.id ? String(localAuthor.id) : "";
+        const updatedId = updated && updated.id ? String(updated.id) : "";
+        if (existingId && updatedId && existingId === updatedId) {
+          setLocalAuthor((prev) => ({ ...prev, ...updated }));
+        }
+      } catch (err) {}
+    }
+    window.addEventListener("app:user:updated", onUserUpdated);
+    return () => window.removeEventListener("app:user:updated", onUserUpdated);
+  }, [localAuthor]);
 
   // Listen for post deletion events and remove this post from UI immediately
   useEffect(() => {
@@ -575,6 +684,37 @@ function PostCard({ post, author, onDelete }) {
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
   }, []);
+
+  // Keep bottom picker attached to button on scroll/resize while open
+  useEffect(() => {
+    if (!pickerOpen) return;
+    function update() {
+      try {
+        const r = bottomButtonRef.current.getBoundingClientRect();
+        const pickerWidth = 320;
+        let left = r.left + r.width / 2 - pickerWidth / 2;
+        const margin = 8;
+        left = Math.max(
+          margin,
+          Math.min(left, window.innerWidth - pickerWidth - margin)
+        );
+        if (pickerAbove) {
+          const bottom = window.innerHeight - r.top + 8;
+          setPickerPos({ left, bottom });
+        } else {
+          const top = r.bottom + 8;
+          setPickerPos({ left, top });
+        }
+      } catch (err) {}
+    }
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    update();
+    return () => {
+      window.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [pickerOpen, pickerAbove]);
 
   const formatTime = (timestamp) => {
     // Neo4j may return an Integer-like object. Safely convert to number.
@@ -671,29 +811,29 @@ function PostCard({ post, author, onDelete }) {
     <div className="bg-white border border-gray-300 rounded-lg overflow-hidden">
       {/* Post header */}
       <div className="flex items-center gap-3 p-4">
-        {author?.avatarUrl ? (
+        {localAuthor?.avatarUrl ? (
           <img
-            src={`http://localhost:5000${author.avatarUrl}`}
-            alt={author?.displayName || author?.username}
+            src={`http://localhost:5000${localAuthor.avatarUrl}`}
+            alt={localAuthor?.displayName || localAuthor?.username}
             className="w-8 h-8 rounded-full object-cover shadow-avatar"
             onError={(e) => {
-              // If image fails to load, hide it so fallback initial shows
               e.target.style.display = "none";
-              // Optionally we could set a state to show fallback, but hiding is fine
             }}
           />
         ) : (
           <div className="w-8 h-8 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full flex items-center justify-center text-white font-bold text-sm shadow-avatar">
             {(
-              author?.displayName?.[0] ||
-              author?.username?.[0] ||
+              localAuthor?.displayName?.[0] ||
+              localAuthor?.username?.[0] ||
               "U"
             ).toUpperCase()}
           </div>
         )}
         <div className="flex-1">
           <div className="font-semibold text-sm text-gray-900">
-            {author?.displayName || author?.username || "Unknown User"}
+            {localAuthor?.displayName ||
+              localAuthor?.username ||
+              "Unknown User"}
           </div>
           <div className="text-xs text-gray-500">
             {formatTime(post?.createdAt)}
@@ -775,7 +915,7 @@ function PostCard({ post, author, onDelete }) {
         {post?.content && (
           <div className="text-sm text-gray-900 leading-relaxed mb-3">
             <span className="font-semibold">
-              {author?.displayName || author?.username}
+              {localAuthor?.displayName || localAuthor?.username}
             </span>{" "}
             {post.content}
           </div>
@@ -1021,12 +1161,33 @@ function PostCard({ post, author, onDelete }) {
                         try {
                           const r =
                             bottomButtonRef.current.getBoundingClientRect();
-                          const width = Math.min(384, window.innerWidth * 0.9);
-                          let left = r.left;
-                          if (left + width > window.innerWidth)
-                            left = window.innerWidth - width - 8;
-                          const top = r.bottom + 8;
-                          setPickerPos({ top, left, width });
+                          const estHeight = Math.min(
+                            window.innerHeight * 0.6,
+                            360
+                          );
+                          const spaceBelow = window.innerHeight - r.bottom;
+                          const willOpenAbove = spaceBelow < estHeight + 16;
+                          setPickerAbove(willOpenAbove);
+
+                          const pickerWidth = 320;
+                          let left = r.left + r.width / 2 - pickerWidth / 2;
+                          const margin = 8;
+                          left = Math.max(
+                            margin,
+                            Math.min(
+                              left,
+                              window.innerWidth - pickerWidth - margin
+                            )
+                          );
+
+                          if (willOpenAbove) {
+                            const bottom = window.innerHeight - r.top + 8;
+                            setPickerPos({ left, bottom });
+                          } else {
+                            const top = r.bottom + 8;
+                            setPickerPos({ left, top });
+                          }
+
                           setPickerOpen(true);
                         } catch (err) {
                           setPickerOpen((s) => !s);
@@ -1038,16 +1199,26 @@ function PostCard({ post, author, onDelete }) {
                       {selectedIcon || "😊"}
                     </button>
 
-                    {pickerOpen && pickerPos && (
+                    {pickerOpen && (
                       <div
                         ref={bottomPickerRef}
-                        className="fixed bg-white border border-gray-200 rounded-md shadow-lg p-3"
+                        className={
+                          "bg-white border border-gray-200 rounded-md shadow-lg p-3 z-50"
+                        }
                         style={{
-                          top: pickerPos.top + "px",
-                          left: pickerPos.left + "px",
-                          width: pickerPos.width + "px",
+                          position: "fixed",
+                          width: "320px",
                           maxHeight: "60vh",
-                          zIndex: 9999,
+                          overflow: "visible",
+                          ...(pickerPos?.left != null
+                            ? { left: `${pickerPos.left}px` }
+                            : {}),
+                          ...(pickerPos?.top != null
+                            ? { top: `${pickerPos.top}px` }
+                            : {}),
+                          ...(pickerPos?.bottom != null
+                            ? { bottom: `${pickerPos.bottom}px` }
+                            : {}),
                         }}
                       >
                         <div className="text-sm font-medium text-gray-700 mb-2">
@@ -1185,14 +1356,16 @@ function CommentNode({
                   </span>
                 </div>
                 {/* Hiển thị snippet của parent comment */}
-                <div className="text-xs text-gray-500 mb-2 border-l-2 border-gray-300 pl-2 italic">
+                <div className="text-xs text-gray-500 mb-2 border-l-2 border-gray-300 pl-2 italic break-words overflow-visible">
                   "{node.parent.comment?.content?.substring(0, 50)}
                   {node.parent.comment?.content?.length > 50 ? "..." : ""}"
                 </div>
                 {/* Nội dung reply */}
-                <div className="text-sm text-gray-800 font-medium flex items-center gap-2">
+                <div className="text-sm text-gray-800 font-medium flex items-center gap-2 break-words overflow-visible">
                   {node.comment?.icon ? renderIcons(node.comment.icon) : null}
-                  <div>{node.comment?.content}</div>
+                  <div className="break-words overflow-visible">
+                    {node.comment?.content}
+                  </div>
                 </div>
                 <div className="mt-2 text-xs text-gray-400 flex items-center gap-3">
                   {(() => {
@@ -1211,9 +1384,9 @@ function CommentNode({
               </div>
             ) : (
               <div>
-                <div className="text-sm text-gray-800 flex items-center gap-2">
+                <div className="text-sm text-gray-800 flex items-center gap-2 break-words overflow-visible">
                   {node.comment?.icon ? renderIcons(node.comment.icon) : null}
-                  <div>
+                  <div className="break-words overflow-visible">
                     <span className="font-semibold mr-2">
                       {node.author?.displayName || node.author?.username}
                     </span>

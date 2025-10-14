@@ -109,6 +109,7 @@ async function main() {
 
     // As an extra test, call debug endpoint to force-emit a notification to the recipient
     try {
+      const emitTs = Date.now();
       const payload = {
         type: "comment",
         fromName: actor.user?.displayName || actor.user?.username || ACTOR,
@@ -121,12 +122,13 @@ async function main() {
         message: `${
           actor.user?.displayName || actor.user?.username || ACTOR
         } đã bình luận về bài viết của bạn (debug emit)`,
-        notifId: "debug-" + Date.now(),
+        notifId: "debug-" + emitTs,
         threadId:
           commentRes.data &&
           commentRes.data.comment &&
           commentRes.data.comment.threadId,
-        timestamp: Date.now(),
+        timestamp: emitTs,
+        timeString: new Date(emitTs).toLocaleString("vi-VN"),
       };
       console.log(
         "Calling debug emit endpoint toUserId=",

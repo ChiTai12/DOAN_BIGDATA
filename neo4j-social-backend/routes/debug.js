@@ -10,7 +10,21 @@ router.post("/emit-notif", (req, res) => {
     const { toUserId, payload } = req.body;
     if (!toUserId || !payload)
       return res.status(400).json({ error: "toUserId and payload required" });
-    io.to(toUserId).emit("notification:new", payload);
+    // Ensure realtime payloads include a numeric timestamp and a localized timeString
+    try {
+      const emitTs =
+        payload && payload.timestamp ? payload.timestamp : Date.now();
+      const enriched = {
+        ...payload,
+        timestamp: emitTs,
+        timeString:
+          payload.timeString || new Date(emitTs).toLocaleString("vi-VN"),
+      };
+      io.to(toUserId).emit("notification:new", enriched);
+    } catch (e) {
+      // fallback to original emit if enrichment fails
+      io.to(toUserId).emit("notification:new", payload);
+    }
     return res.json({ success: true });
   } catch (e) {
     console.error("Debug emit failed", e);

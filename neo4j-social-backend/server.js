@@ -118,8 +118,23 @@ io.on("connection", (socket) => {
   });
 });
 
-// expose io so routes can emit
+// expose io and the userSockets map so routes can emit selectively
 app.locals.io = io;
+app.locals.userSockets = userSockets;
+
+// Debug route to inspect in-memory user->sockets map (dev only)
+app.get("/debug/sockets", (req, res) => {
+  try {
+    const data = Array.from(userSockets.entries()).map(([userId, set]) => ({
+      userId,
+      sockets: Array.from(set),
+      count: set.size,
+    }));
+    res.json({ ok: true, count: data.length, data });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
 
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server successfully running on http://localhost:${PORT}`);

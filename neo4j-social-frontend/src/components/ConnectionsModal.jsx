@@ -90,8 +90,16 @@ export default function ConnectionsModal({ isOpen, onClose }) {
     const handler = (e) => {
       try {
         const payload = e.detail || {};
-        // If payload is for current user (or modal is open), update local lists
-        if (payload.targetId && payload.targetId === user?.id) {
+        // If the payload contains explicit lists, apply them. If targetId is
+        // present, ensure it matches the current user. If targetId is missing
+        // (some servers may omit it), allow update when the modal is open so
+        // the UI reflects the latest server-side state immediately.
+        if (payload.following || payload.followers) {
+          if (!payload.targetId || payload.targetId === user?.id || isOpen) {
+            setFollowing(payload.following || []);
+            setFollowers(payload.followers || []);
+          }
+        } else if (payload.targetId && payload.targetId === user?.id) {
           setFollowing(payload.following || []);
           setFollowers(payload.followers || []);
         }
@@ -101,18 +109,63 @@ export default function ConnectionsModal({ isOpen, onClose }) {
     };
     window.addEventListener("app:connections:update", handler);
     return () => window.removeEventListener("app:connections:update", handler);
-  }, [user?.id]);
+  }, [user?.id, isOpen]);
+
+  // Patch individual profile entries when a user's profile is updated
+  useEffect(() => {
+    function onUserUpdated(e) {
+      const payload = e.detail || e;
+      if (!payload || !payload.user) return;
+      const updated = payload.user;
+      try {
+        setFollowing((prev) =>
+          prev.map((p) => {
+            try {
+              if (!p) return p;
+              if (p.id && updated.id && String(p.id) === String(updated.id))
+                return { ...p, ...updated };
+              if (
+                p.username &&
+                updated.username &&
+                String(p.username) === String(updated.username)
+              )
+                return { ...p, ...updated };
+            } catch (err) {}
+            return p;
+          })
+        );
+        setFollowers((prev) =>
+          prev.map((p) => {
+            try {
+              if (!p) return p;
+              if (p.id && updated.id && String(p.id) === String(updated.id))
+                return { ...p, ...updated };
+              if (
+                p.username &&
+                updated.username &&
+                String(p.username) === String(updated.username)
+              )
+                return { ...p, ...updated };
+            } catch (err) {}
+            return p;
+          })
+        );
+      } catch (err) {}
+    }
+    window.addEventListener("app:user:updated", onUserUpdated);
+    return () => window.removeEventListener("app:user:updated", onUserUpdated);
+  }, []);
 
   // Listen for real-time follow/unfollow events forwarded by Header socket
+  // Always register follow/unfollow handlers so updates forwarded by the
+  // Header socket reach this component; only trigger a reload when the
+  // modal is open to avoid unnecessary background requests.
   useEffect(() => {
-    if (!isOpen) return;
     const onFollow = (e) => {
-      // payload: { followerId, followingId }
-      // reload connections to reflect changes
-      loadConnections();
+      if (isOpen) loadConnections();
     };
     const onUnfollow = (e) => {
-      loadConnections();
+      if (isOpen) loadConnections();
     };
     window.addEventListener("app:user:follow", onFollow);
     window.addEventListener("app:user:unfollow", onUnfollow);

@@ -5,6 +5,31 @@ import ChatWindow from "../components/ChatWindow";
 export default function ChatPage() {
   const [selected, setSelected] = useState(null);
 
+  // Keep selected peer up-to-date when their profile changes elsewhere
+  React.useEffect(() => {
+    function onUserUpdated(e) {
+      const payload = e.detail || e;
+      if (!payload || !payload.user) return;
+      const updated = payload.user;
+      setSelected((s) => {
+        try {
+          if (!s) return s;
+          if (
+            (s.id && updated.id && String(s.id) === String(updated.id)) ||
+            (s.username &&
+              updated.username &&
+              String(s.username) === String(updated.username))
+          ) {
+            return { ...s, ...updated };
+          }
+        } catch (err) {}
+        return s;
+      });
+    }
+    window.addEventListener("app:user:updated", onUserUpdated);
+    return () => window.removeEventListener("app:user:updated", onUserUpdated);
+  }, []);
+
   if (selected) {
     // Show chat window when a user is selected
     return (

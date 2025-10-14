@@ -1,0 +1,7 @@
+📁 Posts routes loaded!
+✅ Server successfully running on http://localhost:5000
+Socket connected: user=be4a4806-b1f4-4d8b-a54f-5fd301034456 socketId=MZJSGGP4xC4UKb48AAAB
+✅ Neo4j connected successfully
+📥 GET /notifications
+🔔 GET /notifications requested by user=b6299fa5-09d4-421a-b3e4-2b627c76bd0b
+Running notifications queries with params: { userId: 'b6299fa5-09d4-421a-b3e4-2b627c76bd0b' }

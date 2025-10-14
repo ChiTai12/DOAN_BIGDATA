@@ -61,16 +61,35 @@ router.post("/register", async (req, res) => {
       );
 
       console.log("✅ User registered successfully:", username);
-      res.json({
-        message: "User registered successfully",
-        user: {
-          id,
-          username,
-          email,
-          displayName: finalDisplayName,
-          fullName: finalFullName,
-        },
-      });
+      // Build returned user object (avoid sensitive fields)
+      const newUser = {
+        id,
+        username,
+        email,
+        displayName: finalDisplayName,
+        fullName: finalFullName,
+        avatarUrl: "",
+      };
+
+      // Emit real-time event so other clients can update suggestions immediately
+      try {
+        const io = req.app && req.app.locals && req.app.locals.io;
+        if (io) {
+          console.log(
+            "Emitting user:created for new user:",
+            newUser.username,
+            newUser.id
+          );
+          io.emit("user:created", { user: newUser });
+        }
+      } catch (emitErr) {
+        console.warn(
+          "Failed to emit user:created from register route",
+          emitErr
+        );
+      }
+
+      res.json({ message: "User registered successfully", user: newUser });
     } catch (dbErr) {
       console.error("❌ Database error:", dbErr);
       res.status(500).json({ error: "Database error: " + dbErr.message });

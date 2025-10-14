@@ -26,6 +26,56 @@ export default function ChatSidebar({ onSelect }) {
     return () => (cancelled = true);
   }, [user, updateTrigger]);
 
+  // Update threads and suggestions when any user's profile is updated elsewhere
+  useEffect(() => {
+    function onUserUpdated(e) {
+      const payload = e.detail || e;
+      if (!payload || !payload.user) return;
+      const updated = payload.user;
+      try {
+        setThreads((prev) =>
+          prev.map((t) => {
+            try {
+              if (
+                t &&
+                t.other &&
+                (String(t.other.id) === String(updated.id) ||
+                  (t.other.username &&
+                    updated.username &&
+                    String(t.other.username) === String(updated.username)))
+              ) {
+                return { ...t, other: { ...t.other, ...updated } };
+              }
+            } catch (err) {}
+            return t;
+          })
+        );
+      } catch (err) {}
+
+      try {
+        setSuggestions((prev) =>
+          prev.map((s) => {
+            try {
+              if (!s) return s;
+              if (s.id && updated.id && String(s.id) === String(updated.id))
+                return { ...s, ...updated };
+              if (
+                s.username &&
+                updated.username &&
+                String(s.username) === String(updated.username)
+              )
+                return { ...s, ...updated };
+            } catch (err) {}
+            return s;
+          })
+        );
+      } catch (err) {}
+    }
+
+    window.addEventListener("app:user:updated", onUserUpdated);
+    return () => window.removeEventListener("app:user:updated", onUserUpdated);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const fetchSuggestions = async () => {
