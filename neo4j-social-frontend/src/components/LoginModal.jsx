@@ -35,7 +35,53 @@ function LoginModal({ onClose }) {
         const userCandidate = data.user ?? data;
         if (!tokenCandidate) {
           console.warn("Login response did not include a token:", data);
+          // Clear any previously stored token to avoid accidentally using a
+          // stale token that belongs to another user (causes account switch).
+          try {
+            localStorage.removeItem("token");
+          } catch (e) {}
+          alert(
+            "Login succeeded but server did not return a token. Please try again or contact support."
+          );
         }
+        // If we have a token, do a sanity check: decode payload and ensure it
+        // refers to the same user object returned by the server. This prevents
+        // a stale/wrong token from a previous session being stored and causing
+        // the UI to switch to another account.
+        if (tokenCandidate && userCandidate) {
+          try {
+            const parts = tokenCandidate.split(".");
+            if (parts.length >= 2) {
+              const payloadJson = JSON.parse(atob(parts[1]));
+              const tokenUserId =
+                payloadJson.userId || payloadJson.id || payloadJson.sub;
+              const returnedUserId =
+                userCandidate.id || userCandidate.userId || null;
+              if (
+                tokenUserId &&
+                returnedUserId &&
+                String(tokenUserId) !== String(returnedUserId)
+              ) {
+                console.error(
+                  "Token payload userId does not match returned user id",
+                  { tokenUserId, returnedUserId }
+                );
+                // Clear any stored token and abort to avoid switching to another account
+                try {
+                  localStorage.removeItem("token");
+                } catch (e) {}
+                alert(
+                  "Login failed: token does not match user information. Please contact support."
+                );
+                setLoading(false);
+                return;
+              }
+            }
+          } catch (e) {
+            console.warn("Failed to decode token for sanity check", e);
+          }
+        }
+
         // Pass whatever we found to the AuthContext.login helper which will
         // persist the token to localStorage. This ensures the app remains
         // authenticated across F5 if a token exists.

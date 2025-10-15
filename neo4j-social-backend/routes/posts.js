@@ -135,6 +135,7 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
         const ioAll = req.app.locals.io;
         if (ioAll) {
           ioAll.emit("post:created", payload);
+          ioAll.emit("stats:update"); // Thông báo dashboard cập nhật realtime
           console.log(`🔊 Emitted post:created for post=${postId}`);
         }
       }
@@ -361,6 +362,7 @@ router.delete("/delete/:postId", verifyToken, async (req, res) => {
           notifIds: deletedNotifIds,
         };
         ioAll.emit("post:deleted", deletedPayload);
+        ioAll.emit("stats:update"); // Thông báo dashboard cập nhật realtime
         console.log(
           `🔊 Emitted post:deleted for post=${req.params.postId}`,
           deletedPayload
@@ -568,6 +570,7 @@ router.put(
           const ioAll = req.app.locals.io;
           if (ioAll) {
             ioAll.emit("post:updated", payload);
+            ioAll.emit("stats:update"); // Thông báo dashboard cập nhật realtime
             console.log(`🔊 Emitted post:updated for post=${postId}`);
           }
         }
@@ -1015,6 +1018,7 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
       const ioAll = req.app && req.app.locals && req.app.locals.io;
       if (ioAll) {
         ioAll.emit("post:commented", payload);
+        ioAll.emit("stats:update"); // Thông báo dashboard cập nhật realtime
         console.log("🔊 Emitted post:commented", payload);
       }
     } catch (emitErr) {
@@ -1203,6 +1207,12 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
             fromUserId: req.userId,
             likesCount,
           });
+          // Also notify dashboards to refresh summary stats (likes count)
+          try {
+            ioAll.emit("stats:update");
+          } catch (e) {
+            console.warn("Failed to emit stats:update after unlike", e);
+          }
         }
       } catch (err) {
         console.error("❌ Failed to emit post:likes:update on unlike", err);
@@ -1219,6 +1229,13 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
         `,
         { userId: req.userId, postId: req.params.postId }
       );
+      // After creating a like, also emit stats:update so dashboards update
+      try {
+        const ioAll = req.app.locals.io;
+        if (ioAll) ioAll.emit("stats:update");
+      } catch (e) {
+        console.warn("Failed to emit stats:update after like", e);
+      }
       console.log(`✅ Successfully created LIKES relationship`);
 
       // After liking, fetch post author and liker info then emit a socket notification

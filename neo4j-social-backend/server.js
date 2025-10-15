@@ -1,6 +1,6 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import path from "path";
 import authRoutes from "./routes/auth.js";
 import userRoutes from "./routes/users.js";
@@ -11,8 +11,6 @@ import http from "http";
 import { Server as SocketIOServer } from "socket.io";
 import jwt from "jsonwebtoken";
 import driver from "./db/driver.js";
-
-dotenv.config();
 const app = express();
 
 app.use(cors());
@@ -27,8 +25,10 @@ app.use((req, res, next) => {
 // Cho phép truy cập ảnh trong thư mục uploads/
 app.use("/uploads", express.static("uploads"));
 
+import adminRoutes from "./routes/admin.js";
 app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
+app.use("/admin", adminRoutes); // Route riêng cho admin
 app.use("/posts", postRoutes);
 app.use("/messages", messageRoutes);
 app.use("/notifications", notificationsRoutes);
@@ -60,6 +60,11 @@ app.get("/test-db", async (req, res) => {
     await session.close();
   }
 });
+
+// Endpoint lấy số liệu thống kê (đặt SAU các app.use và TRƯỚC tạo httpServer)
+
+import statsRoutes from "./routes/stats.js";
+app.use("/stats", statsRoutes);
 
 const PORT = process.env.PORT || 5000;
 

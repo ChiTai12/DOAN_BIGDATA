@@ -1,0 +1,33 @@
+{
+  "id": "936c8eee-bd5b-4455-93bb-bd442b1dddec",
+  "timestamp": "2025-10-14T17:33:28.154Z",
+  "adminProps": {
+    "createdAt": {
+      "low": -560925564,
+      "high": 409
+    },
+    "password": "admin123",
+    "role": "admin",
+    "avatarUrl": "/uploads/1760463084605-12ddbfea-9378-44f4-873d-9e0513b7fe51.jpg",
+    "displayName": "Admin",
+    "bio": "",
+    "fullName": "NguyenChiTai",
+    "id": "936c8eee-bd5b-4455-93bb-bd442b1dddec",
+    "email": "tnxgxg123@gmail.com",
+    "username": "admin"
+  },
+  "userProps": {
+    "createdAt": {
+      "low": -560925564,
+      "high": 409
+    },
+    "password": "hh",
+    "avatarUrl": "/uploads/1760461952808-_soc-dien-tim-2.jpg",
+    "displayName": "xaml",
+    "bio": "",
+    "fullName": "hh",
+    "id": "936c8eee-bd5b-4455-93bb-bd442b1dddec",
+    "email": "hh123@gmail.com",
+    "username": "hh"
+  }
+}

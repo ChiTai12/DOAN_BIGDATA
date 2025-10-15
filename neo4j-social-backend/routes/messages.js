@@ -117,6 +117,12 @@ router.post("/send", verifyToken, async (req, res) => {
         console.log(
           `✅ Emitted message:new to user ${otherId} (from ${req.userId})`
         );
+        // Also notify dashboards to refresh message counts
+        try {
+          io.emit("stats:update");
+        } catch (e) {
+          console.warn("Failed to emit stats:update after message:new", e);
+        }
       } else {
         console.log("❌ Socket.IO not available!");
       }

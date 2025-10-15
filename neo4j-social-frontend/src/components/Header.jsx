@@ -927,7 +927,7 @@ function Header() {
       <header className="fixed top-0 left-0 right-0 bg-white border-b border-gray-200 shadow-sm z-50">
         <div className="flex max-w-7xl w-full gap-10 mx-auto px-6 items-center justify-between h-20">
           {/* Logo */}
-          <div className="text-2xl font-bold uppercase bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent font-['Inter',sans-serif] tracking-wide">
+          <div className="text-2xl font-black uppercase text-blue-800 font-['Inter',sans-serif] tracking-wide">
             MẠNG XÃ HỘI MINI
           </div>
 
@@ -1108,7 +1108,7 @@ function Header() {
                   </button>
 
                   {menuOpen && (
-                    <div className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-xl shadow-lg py-2 z-50">
+                    <div className="absolute left-0 mt-2 w-52 bg-white border border-gray-200 rounded-xl shadow-lg py-2 z-50 translate-x-4 md:translate-x-6">
                       <button
                         onClick={handleUpdateProfile}
                         className="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 font-['Inter',sans-serif] transition-colors"

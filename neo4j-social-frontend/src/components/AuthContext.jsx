@@ -1,5 +1,13 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+} from "react";
 import api from "../services/api";
+import ioClient from "socket.io-client";
+import { SOCKET_URL } from "../config";
 
 const AuthContext = createContext();
 
@@ -15,6 +23,7 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => localStorage.getItem("token"));
   const [isLoading, setIsLoading] = useState(true);
   const [updateTrigger, setUpdateTrigger] = useState(0);
+  const socketRef = useRef(null);
 
   // Restore user data from token when app loads
   useEffect(() => {
@@ -22,17 +31,13 @@ export function AuthProvider({ children }) {
     // if we have a cached user in localStorage, set it immediately so UI stays logged in
     try {
       const rawUser = localStorage.getItem("user");
-      if (rawUser) {
-        setUser(JSON.parse(rawUser));
-      }
+      if (rawUser) setUser(JSON.parse(rawUser));
     } catch (e) {
       // ignore parse errors
     }
 
     if (storedToken) {
-      // keep the token value in state
       setToken(storedToken);
-      // Try to refresh/verify user on background; if it fails, we won't clear token here
       (async () => {
         try {
           console.log("AuthContext: attempting to restore user from /users/me");
@@ -44,9 +49,21 @@ export function AuthProvider({ children }) {
             try {
               localStorage.setItem("user", JSON.stringify(userPayload));
             } catch (e) {}
+            // redirect admin to admin page when restoring session
+            try {
+              const isAdminRestored =
+                userPayload?.role === "admin" ||
+                String(userPayload?.username) === "admin";
+              if (
+                isAdminRestored &&
+                typeof window !== "undefined" &&
+                window.location.pathname !== "/admin"
+              ) {
+                window.location.pathname = "/admin";
+              }
+            } catch (e) {}
           }
         } catch (err) {
-          // don't clear token on failure here — keep token/user cache so user doesn't get logged out on F5
           console.warn(
             "Auth restore failed (will keep cached token/user)",
             err
@@ -56,6 +73,37 @@ export function AuthProvider({ children }) {
     }
     setIsLoading(false);
   }, []);
+
+  // open socket to listen for server-sent user updates (keeps header in sync)
+  useEffect(() => {
+    if (!token) return;
+    try {
+      const socket = ioClient(SOCKET_URL, { auth: { token } });
+      socketRef.current = socket;
+      socket.on("connect", () =>
+        console.log("AuthContext: socket connected", socket.id)
+      );
+      socket.on("user:updated", (payload) => {
+        try {
+          const updated = payload?.user || payload;
+          if (updated) updateUserAndPersist(updated);
+        } catch (e) {
+          console.warn("AuthContext: failed to apply user:updated payload", e);
+        }
+      });
+      socket.on("disconnect", () =>
+        console.log("AuthContext: socket disconnected")
+      );
+    } catch (e) {
+      console.warn("AuthContext: socket init failed", e);
+    }
+    return () => {
+      try {
+        if (socketRef.current) socketRef.current.disconnect();
+      } catch (e) {}
+      socketRef.current = null;
+    };
+  }, [token]);
 
   const login = (userData, authToken) => {
     console.log("AuthContext.login: saving user and token", {
@@ -68,6 +116,16 @@ export function AuthProvider({ children }) {
       if (authToken) {
         localStorage.setItem("token", authToken);
         console.log("AuthContext.login: token written to localStorage");
+      } else {
+        // If no token provided, ensure we don't keep a stale token from a
+        // previous session which could cause the app to call APIs as the
+        // wrong user (observed as switching back to another account).
+        try {
+          localStorage.removeItem("token");
+          console.log(
+            "AuthContext.login: no token returned, cleared stored token"
+          );
+        } catch (e) {}
       }
       if (userData) {
         localStorage.setItem("user", JSON.stringify(userData));
@@ -78,6 +136,21 @@ export function AuthProvider({ children }) {
         "AuthContext.login: failed to write auth data to localStorage",
         e
       );
+    }
+
+    // If this account is an admin, navigate to the standalone admin page
+    try {
+      const isAdmin =
+        userData?.role === "admin" || String(userData?.username) === "admin";
+      if (
+        isAdmin &&
+        typeof window !== "undefined" &&
+        window.location.pathname !== "/admin"
+      ) {
+        window.location.pathname = "/admin";
+      }
+    } catch (e) {
+      // ignore navigation errors
     }
   };
 
@@ -99,6 +172,17 @@ export function AuthProvider({ children }) {
     console.log("🔄 AuthContext: User updated successfully (no localStorage)");
   };
 
+  // Persisting update: keep localStorage in sync when updating user via this helper
+  const updateUserAndPersist = (userData) => {
+    updateUserOnly(userData);
+    try {
+      localStorage.setItem("user", JSON.stringify(userData));
+      console.log("AuthContext: persisted updated user to localStorage");
+    } catch (e) {
+      console.warn("AuthContext: failed to persist updated user", e);
+    }
+  };
+
   // Không cần updateUser với localStorage nữa
 
   const logout = () => {
@@ -118,9 +202,9 @@ export function AuthProvider({ children }) {
         token,
         login,
         logout,
-        updateUserOnly,
+        updateUserOnly: updateUserAndPersist,
         isLoading,
-        setUser: updateUserOnly,
+        setUser: updateUserAndPersist,
         updateTrigger,
       }}
     >

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useAuth } from "./AuthContext";
 import api from "../services/api";
 
-const SidebarComponent = () => {
+const SidebarComponent = ({ onToggleAdmin }) => {
   const { user, updateTrigger } = useAuth();
   const [suggestions, setSuggestions] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -230,6 +230,17 @@ const SidebarComponent = () => {
 
   return (
     <div className="w-full space-y-6">
+      {/* Admin action - only visible to admin users */}
+      {(user?.role === "admin" || String(user?.username) === "admin") && (
+        <div className="bg-white border border-gray-300 rounded-lg p-4">
+          <button
+            onClick={() => (window.location.pathname = "/admin")}
+            className="w-full bg-blue-600 text-white py-2 rounded-lg font-medium"
+          >
+            Open Admin Dashboard
+          </button>
+        </div>
+      )}
       <div className="bg-white border border-gray-300 rounded-lg p-6">
         <div className="flex items-center gap-4" key={updateTrigger}>
           {user?.avatarUrl ? (

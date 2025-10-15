@@ -2,12 +2,13 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import driver from "../db/driver.js";
-import { verifyToken } from "../middleware/auth.js";
+import requireUser from "../middleware/requireUser.js";
+import requireAdmin from "../middleware/requireAdmin.js";
 
 const router = express.Router();
 
 // Get all users (for messenger dropdown)
-router.get("/", verifyToken, async (req, res) => {
+router.get("/", requireUser, async (req, res) => {
   const session = driver.session();
   try {
     const result = await session.run(
@@ -66,7 +67,7 @@ router.get("/suggestions", async (req, res) => {
 });
 
 // Get current authenticated user
-router.get("/me", verifyToken, async (req, res) => {
+router.get("/me", requireUser, async (req, res) => {
   const session = driver.session();
   try {
     const result = await session.run(
@@ -90,7 +91,7 @@ router.get("/me", verifyToken, async (req, res) => {
 });
 
 // Get list of user ids that the current user is following
-router.get("/following", verifyToken, async (req, res) => {
+router.get("/following", requireUser, async (req, res) => {
   const session = driver.session();
   try {
     const result = await session.run(
@@ -108,7 +109,7 @@ router.get("/following", verifyToken, async (req, res) => {
 });
 
 // Get list of user ids that follow the current user
-router.get("/followers", verifyToken, async (req, res) => {
+router.get("/followers", requireUser, async (req, res) => {
   const session = driver.session();
   try {
     const result = await session.run(
@@ -126,7 +127,7 @@ router.get("/followers", verifyToken, async (req, res) => {
 });
 
 // Get full profile objects for both following and followers (for Connections UI)
-router.get("/connections", verifyToken, async (req, res) => {
+router.get("/connections", requireUser, async (req, res) => {
   const session = driver.session();
   try {
     // Users the current user is following
@@ -185,7 +186,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // TEST ROUTE - Temporary for debugging (remove later)
-router.put("/test-update/:userId", async (req, res) => {
+router.put("/test-update/:userId", requireUser, async (req, res) => {
   const { username, avatarUrl } = req.body;
   const userId = req.params.userId;
   console.log("🧪 TEST UPDATE:", { username, avatarUrl, userId });
@@ -248,7 +249,7 @@ router.put("/test-update/:userId", async (req, res) => {
 });
 
 // Cập nhật hồ sơ
-router.put("/update", verifyToken, async (req, res) => {
+router.put("/update", requireUser, async (req, res) => {
   // Accept displayName and avatarUrl per spec
   const { displayName, avatarUrl } = req.body;
   console.log("🔧 PUT /users/update called:", {
@@ -319,7 +320,7 @@ router.put("/update", verifyToken, async (req, res) => {
 });
 
 // Đổi mật khẩu
-router.put("/change-password", verifyToken, async (req, res) => {
+router.put("/change-password", requireUser, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
   if (!currentPassword || !newPassword) {
@@ -372,7 +373,7 @@ router.put("/change-password", verifyToken, async (req, res) => {
 // Upload avatar
 router.post(
   "/upload-avatar",
-  verifyToken,
+  requireUser,
   upload.single("avatar"),
   async (req, res) => {
     const filePath = `/uploads/${req.file.filename}`;
@@ -408,7 +409,7 @@ router.post(
 );
 
 // Follow user
-router.post("/follow/:userId", verifyToken, async (req, res) => {
+router.post("/follow/:userId", requireUser, async (req, res) => {
   const session = driver.session();
   try {
     await session.run(
@@ -478,7 +479,7 @@ router.post("/follow/:userId", verifyToken, async (req, res) => {
 });
 
 // Unfollow user
-router.delete("/follow/:userId", verifyToken, async (req, res) => {
+router.delete("/follow/:userId", requireUser, async (req, res) => {
   const session = driver.session();
   try {
     await session.run(
@@ -546,7 +547,7 @@ router.delete("/follow/:userId", verifyToken, async (req, res) => {
 });
 
 // Remove a follower (delete relation from :userId -> current user)
-router.delete("/remove-follower/:userId", verifyToken, async (req, res) => {
+router.delete("/remove-follower/:userId", requireUser, async (req, res) => {
   const session = driver.session();
   try {
     await session.run(
