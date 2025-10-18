@@ -354,7 +354,7 @@ export default function AdminDashboard() {
         <main className="flex-1 p-6 md:ml-96">
           <div className="max-w-7xl ml-8">
             <div className="flex items-center justify-between mb-6">
-              <h1 className="text-3xl font-bold text-gray-900">DASHBOARD</h1>
+              <h1 className="text-3xl font-bold text-gray-900">BẢNG ĐIỀU KHIỂN</h1>
               <div className="relative">
                 {/* Avatar dropdown cho admin */}
                 <AdminDashboardMenu logout={logout} admin={user} />
@@ -479,7 +479,7 @@ export default function AdminDashboard() {
               {/* Left: large User Growth card */}
               <div className="lg:col-span-2 bg-white rounded-xl p-6 shadow-sm min-h-[500px]">
                 <h3 className="text-xl font-semibold text-gray-800 mb-4">
-                  User Growth
+                  Tăng trưởng người dùng
                 </h3>
                 <div className="h-[460px] rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400">
                   {trendData ? (

@@ -25,7 +25,7 @@ export function AuthProvider({ children }) {
   const [updateTrigger, setUpdateTrigger] = useState(0);
   const socketRef = useRef(null);
 
-  // Restore user data from token when app loads
+  // Khôi phục dữ liệu user từ token khi app khởi động
   useEffect(() => {
     const storedToken = localStorage.getItem("token");
     // if we have a cached user in localStorage, set it immediately so UI stays logged in
@@ -40,10 +40,10 @@ export function AuthProvider({ children }) {
       setToken(storedToken);
       (async () => {
         try {
-          console.log("AuthContext: attempting to restore user from /users/me");
+          console.log("AuthContext: đang khôi phục user từ /users/me");
           const res = await api.get("/users/me");
           const userPayload = res.data?.user ?? res.data;
-          console.log("AuthContext: /users/me response", res.data);
+          console.log("AuthContext: phản hồi /users/me", res.data);
           if (userPayload) {
             setUser(userPayload);
             try {
@@ -64,38 +64,38 @@ export function AuthProvider({ children }) {
             } catch (e) {}
           }
         } catch (err) {
-          console.warn(
-            "Auth restore failed (will keep cached token/user)",
-            err
-          );
+          console.warn("Khôi phục Auth thất bại (giữ cache token/user)", err);
         }
       })();
     }
     setIsLoading(false);
   }, []);
 
-  // open socket to listen for server-sent user updates (keeps header in sync)
+  // Mở socket để lắng nghe cập nhật user từ server (giữ header đồng bộ)
   useEffect(() => {
     if (!token) return;
     try {
       const socket = ioClient(SOCKET_URL, { auth: { token } });
       socketRef.current = socket;
       socket.on("connect", () =>
-        console.log("AuthContext: socket connected", socket.id)
+        console.log("AuthContext: socket đã kết nối", socket.id)
       );
       socket.on("user:updated", (payload) => {
         try {
           const updated = payload?.user || payload;
           if (updated) updateUserAndPersist(updated);
         } catch (e) {
-          console.warn("AuthContext: failed to apply user:updated payload", e);
+          console.warn(
+            "AuthContext: không áp dụng được payload user:updated",
+            e
+          );
         }
       });
       socket.on("disconnect", () =>
-        console.log("AuthContext: socket disconnected")
+        console.log("AuthContext: socket ngắt kết nối")
       );
     } catch (e) {
-      console.warn("AuthContext: socket init failed", e);
+      console.warn("AuthContext: khởi tạo socket thất bại", e);
     }
     return () => {
       try {
@@ -106,7 +106,7 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   const login = (userData, authToken) => {
-    console.log("AuthContext.login: saving user and token", {
+    console.log("AuthContext.login: lưu user và token", {
       userData,
       authToken,
     });
@@ -115,7 +115,7 @@ export function AuthProvider({ children }) {
     try {
       if (authToken) {
         localStorage.setItem("token", authToken);
-        console.log("AuthContext.login: token written to localStorage");
+        console.log("AuthContext.login: token đã lưu vào localStorage");
       } else {
         // If no token provided, ensure we don't keep a stale token from a
         // previous session which could cause the app to call APIs as the
@@ -123,17 +123,17 @@ export function AuthProvider({ children }) {
         try {
           localStorage.removeItem("token");
           console.log(
-            "AuthContext.login: no token returned, cleared stored token"
+            "AuthContext.login: không có token trả về, đã xóa token lưu trước đó"
           );
         } catch (e) {}
       }
       if (userData) {
         localStorage.setItem("user", JSON.stringify(userData));
-        console.log("AuthContext.login: user written to localStorage");
+        console.log("AuthContext.login: user đã lưu vào localStorage");
       }
     } catch (e) {
       console.warn(
-        "AuthContext.login: failed to write auth data to localStorage",
+        "AuthContext.login: không ghi được auth data vào localStorage",
         e
       );
     }
@@ -150,17 +150,17 @@ export function AuthProvider({ children }) {
         window.location.pathname = "/admin";
       }
     } catch (e) {
-      // ignore navigation errors
+      // bỏ qua lỗi điều hướng
     }
   };
 
-  // Function để update user mà KHÔNG lưu localStorage
+  // Hàm cập nhật user KHÔNG lưu vào localStorage
   const updateUserOnly = (userData) => {
     console.log(
-      "🔄 AuthContext: Updating user data (no localStorage):",
+      "🔄 AuthContext: Cập nhật dữ liệu user (không lưu localStorage):",
       userData
     );
-    console.log("🔄 AuthContext: Previous user data:", user);
+    console.log("🔄 AuthContext: Dữ liệu user trước đó:", user);
 
     // Tạo object mới để đảm bảo React detect thay đổi
     const newUserData = { ...userData };
@@ -169,7 +169,9 @@ export function AuthProvider({ children }) {
     // Force re-render tất cả components
     setUpdateTrigger((prev) => prev + 1);
 
-    console.log("🔄 AuthContext: User updated successfully (no localStorage)");
+    console.log(
+      "🔄 AuthContext: Cập nhật user thành công (không lưu localStorage)"
+    );
   };
 
   // Persisting update: keep localStorage in sync when updating user via this helper
@@ -177,9 +179,9 @@ export function AuthProvider({ children }) {
     updateUserOnly(userData);
     try {
       localStorage.setItem("user", JSON.stringify(userData));
-      console.log("AuthContext: persisted updated user to localStorage");
+      console.log("AuthContext: đã lưu user cập nhật vào localStorage");
     } catch (e) {
-      console.warn("AuthContext: failed to persist updated user", e);
+      console.warn("AuthContext: không lưu được user cập nhật", e);
     }
   };
 
@@ -216,7 +218,7 @@ export function AuthProvider({ children }) {
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error("useAuth must be used within AuthProvider");
+    throw new Error("useAuth phải được sử dụng bên trong AuthProvider");
   }
   return context;
 };
