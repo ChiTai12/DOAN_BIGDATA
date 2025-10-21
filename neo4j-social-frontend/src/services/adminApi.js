@@ -22,4 +22,34 @@ export const changeAdminPassword = (passwordData) =>
 export const uploadAdminAvatar = (formData) =>
   adminApi.post("/admin/upload-avatar", formData);
 
+// Admin post management
+export const fetchAdminPosts = async (params) => {
+  try {
+    return await adminApi.get("/admin/posts", { params });
+  } catch (err) {
+    // If unauthorized/forbidden, fall back to public dev endpoint so UI can load posts from DB
+    const status = err && err.response && err.response.status;
+    if (status === 401 || status === 403) {
+      try {
+        return await axios.get(`${API_BASE_URL}/admin/posts/public`, {
+          params,
+        });
+      } catch (err2) {
+        throw err2;
+      }
+    }
+    throw err;
+  }
+};
+// Admin deletion disabled: keep function but make it throw so callers fail fast.
+export const deleteAdminPost = (postId) => {
+  return Promise.reject(
+    new Error(
+      "Admin deletion of posts is disabled. Authors can remove their own posts via the author endpoint."
+    )
+  );
+};
+export const hideAdminPost = (postId) =>
+  adminApi.post(`/admin/posts/${postId}/hide`);
+
 export default adminApi;

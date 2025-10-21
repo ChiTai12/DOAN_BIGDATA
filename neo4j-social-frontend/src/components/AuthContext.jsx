@@ -74,6 +74,41 @@ export function AuthProvider({ children }) {
     setIsLoading(false);
   }, []);
 
+  // Listen for cross-tab localStorage changes to token/user to avoid silent
+  // session takeover. If a different token is written by another tab we log a
+  // warning so the developer (or user) can take action; if token is removed we
+  // clear local auth state.
+  useEffect(() => {
+    function onStorage(e) {
+      try {
+        if (e.key === "token") {
+          console.log(
+            "AuthContext: storage event token changed",
+            e.oldValue,
+            e.newValue
+          );
+          if (!e.newValue) {
+            // token was removed in another tab - sign out locally
+            console.log(
+              "AuthContext: token removed in another tab, clearing local auth state"
+            );
+            setUser(null);
+            setToken(null);
+          } else if (e.newValue !== token) {
+            // token changed in another tab - notify
+            console.warn(
+              "AuthContext: token changed in another tab. This tab will keep its active session to avoid unexpected switches."
+            );
+          }
+        }
+      } catch (err) {
+        console.warn("AuthContext: storage event handler error", err);
+      }
+    }
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [token]);
+
   // open socket to listen for server-sent user updates (keeps header in sync)
   useEffect(() => {
     if (!token) return;
@@ -86,7 +121,31 @@ export function AuthProvider({ children }) {
       socket.on("user:updated", (payload) => {
         try {
           const updated = payload?.user || payload;
-          if (updated) updateUserAndPersist(updated);
+          // Only update local user if the incoming update is for the same user id.
+          // Some server code broadcasts user:updated to all connected sockets;
+          // applying those blindly would overwrite the active session in other tabs.
+          try {
+            const incomingId =
+              updated && (updated.id || updated.userId || updated._id);
+            const currentId = user && (user.id || user.userId || user._id);
+            if (
+              incomingId &&
+              currentId &&
+              String(incomingId) === String(currentId)
+            ) {
+              updateUserAndPersist(updated);
+            } else {
+              console.log(
+                "AuthContext: ignoring user:updated for different user",
+                { incomingId, currentId }
+              );
+            }
+          } catch (inner) {
+            console.warn(
+              "AuthContext: failed to compare user ids for user:updated",
+              inner
+            );
+          }
         } catch (e) {
           console.warn("AuthContext: failed to apply user:updated payload", e);
         }
@@ -113,13 +172,41 @@ export function AuthProvider({ children }) {
     setUser(userData);
     setToken(authToken);
     try {
+      const existingToken = localStorage.getItem("token");
+      const existingUserRaw = localStorage.getItem("user");
+      let existingUser = null;
+      try {
+        if (existingUserRaw) existingUser = JSON.parse(existingUserRaw);
+      } catch (e) {
+        existingUser = null;
+      }
+
+      // Only write token when:
+      // - no token currently stored, OR
+      // - the stored token belongs to the same user as the incoming userData
+      // This prevents a background OAuth/redirect in another tab from silently
+      // overwriting the active session in this tab.
       if (authToken) {
-        localStorage.setItem("token", authToken);
-        console.log("AuthContext.login: token written to localStorage");
+        if (!existingToken) {
+          localStorage.setItem("token", authToken);
+          console.log("AuthContext.login: token written to localStorage");
+        } else if (
+          existingUser &&
+          userData &&
+          String(existingUser.id) === String(userData.id)
+        ) {
+          // same user, safe to overwrite (refresh)
+          localStorage.setItem("token", authToken);
+          console.log("AuthContext.login: token refreshed for same user");
+        } else if (existingToken && existingToken === authToken) {
+          // same token value, nothing to do
+        } else {
+          console.warn(
+            "AuthContext.login: token in localStorage belongs to a different user - skipping overwrite for safety"
+          );
+        }
       } else {
-        // If no token provided, ensure we don't keep a stale token from a
-        // previous session which could cause the app to call APIs as the
-        // wrong user (observed as switching back to another account).
+        // If no token provided, clear stored token to avoid stale sessions
         try {
           localStorage.removeItem("token");
           console.log(
@@ -127,6 +214,7 @@ export function AuthProvider({ children }) {
           );
         } catch (e) {}
       }
+
       if (userData) {
         localStorage.setItem("user", JSON.stringify(userData));
         console.log("AuthContext.login: user written to localStorage");

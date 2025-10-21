@@ -169,6 +169,8 @@ router.get("/feed", async (req, res) => {
 
     const q = `
       MATCH (u:User)-[:POSTED]->(p:Post)
+      // Only include posts that are not hidden OR posts where the author is the viewer
+      WHERE coalesce(p.hidden, false) = false OR u.id = $viewerId
       OPTIONAL MATCH (p)<-[:LIKES]-(liker:User)
       OPTIONAL MATCH (viewer:User {id:$viewerId})-[r:LIKES]->(p)
       WITH u, p, COUNT(liker) as likesCount, (r IS NOT NULL) AS liked
@@ -841,6 +843,35 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
                         });
                       }
                     });
+                    // Fallback: also emit to the room for the author id so that
+                    // clients which joined the author room receive the notification
+                    // even if userSockets map was out-of-date.
+                    try {
+                      const emitTsRoom = Date.now();
+                      io.to(parentAuthorId).emit("notification:new", {
+                        type: "reply",
+                        fromName: replierName,
+                        fromUserId: req.userId,
+                        postId,
+                        commentId,
+                        message,
+                        commentText: content,
+                        notifId,
+                        threadId,
+                        timestamp: emitTsRoom,
+                        timeString: new Date(emitTsRoom).toLocaleString(
+                          "vi-VN"
+                        ),
+                      });
+                      console.log(
+                        `🔔 Also emitted notification:new to room ${parentAuthorId} as fallback`
+                      );
+                    } catch (e) {
+                      console.warn(
+                        "Failed fallback emit to parentAuthor room",
+                        e
+                      );
+                    }
                   } else {
                     // fallback to room emit
                     const emitTs = Date.now();
@@ -967,6 +998,35 @@ router.post("/:postId/comments", verifyToken, async (req, res) => {
                         });
                       }
                     });
+                    // Fallback: also emit to the room for the post author so any
+                    // sockets in that room receive the notification even if the
+                    // explicit userSockets mapping missed them.
+                    try {
+                      const emitTsRoom = Date.now();
+                      io.to(postAuthorId).emit("notification:new", {
+                        type: "comment",
+                        fromName: commenterName,
+                        fromUserId: req.userId,
+                        postId,
+                        commentId,
+                        message,
+                        commentText: content,
+                        notifId,
+                        threadId,
+                        timestamp: emitTsRoom,
+                        timeString: new Date(emitTsRoom).toLocaleString(
+                          "vi-VN"
+                        ),
+                      });
+                      console.log(
+                        `🔔 Also emitted notification:new to room ${postAuthorId} as fallback`
+                      );
+                    } catch (e) {
+                      console.warn(
+                        "Failed fallback emit to postAuthor room",
+                        e
+                      );
+                    }
                   } else {
                     const emitTs = Date.now();
                     io.to(postAuthorId).emit("notification:new", {
@@ -1143,12 +1203,29 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
         const idsArray = findRes.records.map((r) => r.get("id")) || [];
         if (idsArray.length > 0) {
           console.log(
-            `🗑️ Deleting notifications for post=${req.params.postId} from user=${req.userId}:`,
+            `🗑️ Candidate notification ids for deletion for post=${req.params.postId} from user=${req.userId}:`,
             idsArray
           );
+          // Ensure ids are strings to avoid Neo4j Integer objects leaking
+          const idsToDelete = idsArray.map((i) =>
+            i && i.toString ? i.toString() : String(i)
+          );
+          console.log(
+            `🗑️ Resolved notification ids to delete (strings):`,
+            idsToDelete
+          );
+          // Extra-safety: only delete notifications that are explicitly type 'like'
+          // and that do not reference a comment (i.e., commentId is null/absent).
+          // Also ensure the notification is about this post either via ABOUT relationship or postId prop.
           await session.run(
-            `MATCH (n:Notification) WHERE n.id IN $ids DETACH DELETE n`,
-            { ids: idsArray }
+            `MATCH (n:Notification)
+             WHERE n.id IN $ids
+               AND n.type = 'like'
+               AND n.fromUserId = $userId
+               AND (coalesce(n.commentId, '') = '' OR n.commentId IS NULL)
+               AND (coalesce(n.postId, '') = $postId OR exists((n)-[:ABOUT]->(:Post {id:$postId})))
+             DETACH DELETE n`,
+            { ids: idsToDelete, postId: req.params.postId, userId: req.userId }
           );
 
           // find post author to notify
@@ -1162,11 +1239,12 @@ router.post("/:postId/like", verifyToken, async (req, res) => {
 
           const io = req.app.locals.io;
           if (io && authorId) {
+            // Emit stringified ids so clients can compare reliably
             io.to(authorId).emit("notification:remove", {
               type: "like",
               fromUserId: req.userId,
               postId: req.params.postId,
-              notifIds: idsArray,
+              notifIds: idsToDelete,
             });
             console.log(
               `🔕 Emitted notification:remove to user=${authorId} removedIds=${JSON.stringify(

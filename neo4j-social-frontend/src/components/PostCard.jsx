@@ -46,6 +46,52 @@ function renderIcons(icon) {
   );
 }
 
+// Return the last visible symbol from a possibly multi-symbol string.
+// Uses Array.from to handle surrogate pairs; not perfect for complex ZWJ sequences
+// but sufficient for common emoji usage in this demo.
+function lastSymbol(s) {
+  try {
+    if (!s) return "";
+    const arr = Array.from(s);
+    return arr.length ? arr[arr.length - 1] : "";
+  } catch (e) {
+    return s ? s.slice(-1) : "";
+  }
+}
+
+// Normalize icon property (array, comma-separated string, or single string)
+// into a contiguous string of emoji characters for prefix comparisons.
+function normalizeIconString(icon) {
+  if (!icon) return "";
+  try {
+    if (Array.isArray(icon)) return icon.join("");
+    if (typeof icon === "string") {
+      if (icon.includes(","))
+        return icon
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .join("");
+      return icon;
+    }
+    return String(icon);
+  } catch (e) {
+    return String(icon || "");
+  }
+}
+
+function contentStartsWithIcon(content, icon) {
+  if (!content || !icon) return false;
+  const prefix = normalizeIconString(icon);
+  if (!prefix) return false;
+  try {
+    // If content already contains the same icon sequence anywhere, treat it as present
+    return content.indexOf(prefix) !== -1;
+  } catch (e) {
+    return false;
+  }
+}
+
 // Normalize different shapes of comment payloads from API / realtime events
 const normalizeComment = (raw) => {
   if (!raw) return null;
@@ -156,6 +202,19 @@ function InlineComposer({ postId, parentId, onPosted, onCancel }) {
   const [pickerPosLocal, setPickerPosLocal] = useState(null);
   const inlinePickerRef = useRef(null);
   const [pickerAboveLocal, setPickerAboveLocal] = useState(false);
+
+  // Return the last visible symbol from a possibly multi-symbol string.
+  // Uses Array.from to handle surrogate pairs; not perfect for complex ZWJ sequences
+  // but sufficient for common emoji usage in this demo.
+  const lastSymbol = (s) => {
+    try {
+      if (!s) return "";
+      const arr = Array.from(s);
+      return arr.length ? arr[arr.length - 1] : "";
+    } catch (e) {
+      return s ? s.slice(-1) : "";
+    }
+  };
   useEffect(() => {
     function onDocClick(e) {
       if (
@@ -200,6 +259,32 @@ function InlineComposer({ postId, parentId, onPosted, onCancel }) {
       window.removeEventListener("resize", update);
     };
   }, [pickerOpenLocal, pickerAboveLocal]);
+
+  // Insert emoji into the inline composer input at caret position
+  function insertEmoji(sym) {
+    try {
+      if (ref.current && typeof ref.current.selectionStart === "number") {
+        const el = ref.current;
+        const s = el.selectionStart;
+        const e = el.selectionEnd;
+        const nt = text.slice(0, s) + sym + text.slice(e);
+        setText(nt);
+        requestAnimationFrame(() => {
+          try {
+            el.focus();
+            const pos = s + sym.length;
+            el.setSelectionRange(pos, pos);
+          } catch (err) {}
+        });
+      } else {
+        setText((t) => t + sym);
+      }
+    } catch (err) {
+      setText((t) => t + sym);
+    }
+    // append symbol to selected icon(s) so user can pick multiple
+    setSelectedIconLocal((s) => (s ? s + sym : sym));
+  }
 
   return (
     <form
@@ -295,7 +380,7 @@ function InlineComposer({ postId, parentId, onPosted, onCancel }) {
               className="px-2 py-1 rounded-full hover:bg-gray-100"
               title="Chọn cảm xúc"
             >
-              {selectedIconLocal || "😊"}
+              {lastSymbol(selectedIconLocal) || "😊"}
             </button>
             {pickerOpenLocal && (
               <div
@@ -735,6 +820,33 @@ function PostCard({ post, author, onDelete }) {
     return date.toLocaleDateString();
   };
 
+  // Insert emoji into main comment input at caret
+  function insertEmojiBottom(sym) {
+    try {
+      const el = commentInputRef.current;
+      if (el && typeof el.selectionStart === "number") {
+        const s = el.selectionStart;
+        const e = el.selectionEnd;
+        const nt = commentText.slice(0, s) + sym + commentText.slice(e);
+        setCommentText(nt);
+        requestAnimationFrame(() => {
+          try {
+            el.focus();
+            const pos = s + sym.length;
+            el.setSelectionRange(pos, pos);
+          } catch (err) {}
+        });
+      } else {
+        setCommentText((t) => t + sym);
+      }
+    } catch (err) {
+      setCommentText((t) => t + sym);
+    }
+    // append symbol to selected icon(s) so user can pick multiple
+    setSelectedIcon((s) => (s ? s + sym : sym));
+    // keep picker open to allow multiple selections
+  }
+
   // helper: clear reply state and inline composers with feedback
   const clearReply = () => {
     try {
@@ -893,6 +1005,19 @@ function PostCard({ post, author, onDelete }) {
           </button>
         )}
       </div>
+
+      {/* Warning banner for hidden posts (visible only to the author) */}
+      {isAuthor && post && (post.hidden === true || post.hidden === "true") && (
+        <div className="px-4">
+          <div className="bg-yellow-50 border-l-4 border-yellow-400 text-yellow-900 px-4 py-3 rounded-sm mb-3">
+            <strong className="block">Bài viết hiện đang bị ẩn</strong>
+            <div className="text-sm">
+              Bài viết hiện đang bị ẩn vì quy phạm cộng đồng, chỉnh sửa và cập
+              nhật lại ngay!
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Post image */}
       {post?.imageUrl && (
@@ -1196,7 +1321,7 @@ function PostCard({ post, author, onDelete }) {
                       className="px-2 py-1 rounded-full hover:bg-gray-100"
                       title="Chọn cảm xúc"
                     >
-                      {selectedIcon || "😊"}
+                      {lastSymbol(selectedIcon) || "😊"}
                     </button>
 
                     {pickerOpen && (
@@ -1232,34 +1357,7 @@ function PostCard({ post, author, onDelete }) {
                                 type="button"
                                 onClick={(ev) => {
                                   ev.stopPropagation();
-                                  try {
-                                    if (
-                                      commentInputRef.current &&
-                                      typeof commentInputRef.current
-                                        .selectionStart === "number"
-                                    ) {
-                                      const el = commentInputRef.current;
-                                      const s = el.selectionStart;
-                                      const e = el.selectionEnd;
-                                      const nt =
-                                        commentText.slice(0, s) +
-                                        f.symbol +
-                                        commentText.slice(e);
-                                      setCommentText(nt);
-                                      requestAnimationFrame(() => {
-                                        try {
-                                          el.focus();
-                                          const pos = s + f.symbol.length;
-                                          el.setSelectionRange(pos, pos);
-                                        } catch (err) {}
-                                      });
-                                    } else {
-                                      setCommentText((t) => t + f.symbol);
-                                    }
-                                  } catch (err) {
-                                    setCommentText((t) => t + f.symbol);
-                                  }
-                                  setSelectedIcon(f.symbol);
+                                  insertEmojiBottom(f.symbol);
                                 }}
                                 className="w-12 h-12 rounded-md flex items-center justify-center text-2xl transition-colors hover:bg-gray-100"
                                 title={f.label}
@@ -1362,7 +1460,12 @@ function CommentNode({
                 </div>
                 {/* Nội dung reply */}
                 <div className="text-sm text-gray-800 font-medium flex items-center gap-2 break-words overflow-visible">
-                  {node.comment?.icon ? renderIcons(node.comment.icon) : null}
+                  {!contentStartsWithIcon(
+                    node.comment?.content,
+                    node.comment?.icon
+                  ) && node.comment?.icon
+                    ? renderIcons(node.comment.icon)
+                    : null}
                   <div className="break-words overflow-visible">
                     {node.comment?.content}
                   </div>
@@ -1385,7 +1488,12 @@ function CommentNode({
             ) : (
               <div>
                 <div className="text-sm text-gray-800 flex items-center gap-2 break-words overflow-visible">
-                  {node.comment?.icon ? renderIcons(node.comment.icon) : null}
+                  {!contentStartsWithIcon(
+                    node.comment?.content,
+                    node.comment?.icon
+                  ) && node.comment?.icon
+                    ? renderIcons(node.comment.icon)
+                    : null}
                   <div className="break-words overflow-visible">
                     <span className="font-semibold mr-2">
                       {node.author?.displayName || node.author?.username}

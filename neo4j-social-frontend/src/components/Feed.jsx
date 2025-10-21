@@ -21,6 +21,15 @@ function Feed() {
     const onPostCreated = (e) => {
       const payload = e.detail || e;
       if (!payload || !payload.post) return;
+      // If post is hidden and the current viewer is NOT the author, ignore it
+      try {
+        const isHidden = payload.post && payload.post.hidden;
+        const authorId = payload.author && payload.author.id;
+        const viewerId = user && user.id;
+        if (isHidden && String(authorId) !== String(viewerId)) return;
+      } catch (err) {
+        // defensive - fallthrough to avoid blocking valid posts on error
+      }
       // avoid duplicates: if already present, skip
       setPosts((prev) => {
         const exists = prev.some((p) => p.post.id === payload.post.id);
@@ -61,7 +70,10 @@ function Feed() {
       if (!payload) return;
       // accept multiple payload shapes: { postId }, { post: { id } }, { id }
       const postId =
-        payload.postId || (payload.post && payload.post.id) || payload.id || null;
+        payload.postId ||
+        (payload.post && payload.post.id) ||
+        payload.id ||
+        null;
       if (!postId) {
         // no post id provided — conservatively refresh feed
         fetchPosts();
@@ -88,7 +100,22 @@ function Feed() {
     try {
       const response = await api.get("/posts/feed");
       console.debug("fetchPosts: server response:", response.data);
-      setPosts(response.data);
+      try {
+        // Normalize: if post items include hidden flag, filter out hidden posts for non-authors
+        const data = Array.isArray(response.data) ? response.data : [];
+        const visible = data.filter((item) => {
+          try {
+            const isHidden = item.post && item.post.hidden;
+            const authorId = item.author && item.author.id;
+            const viewerId = user && user.id;
+            if (isHidden && String(authorId) !== String(viewerId)) return false;
+          } catch (e) {}
+          return true;
+        });
+        setPosts(visible);
+      } catch (e) {
+        setPosts(response.data);
+      }
     } catch (error) {
       console.error("Error fetching posts:", error);
     } finally {

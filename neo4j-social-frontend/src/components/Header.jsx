@@ -4,6 +4,7 @@ import LoginModal from "./LoginModal";
 import UpdateProfileModal from "./UpdateProfileModal";
 import ChangePasswordModal from "./ChangePasswordModal";
 import ChatPage from "../pages/ChatPage";
+import ConnectionsModal from "./ConnectionsModal";
 import {
   FaHome,
   FaCommentAlt,
@@ -15,34 +16,57 @@ import {
 import { FiPlus, FiMessageCircle } from "react-icons/fi";
 import { AiOutlineHome, AiOutlinePlusSquare } from "react-icons/ai";
 import ioClient from "socket.io-client";
-import ConnectionsModal from "./ConnectionsModal";
 import { SOCKET_URL } from "../config.js";
 
 function Header() {
-  const { user, logout, updateUserOnly } = useAuth();
+  const { user, logout, updateUserOnly, token: ctxToken } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [showUpdateProfile, setShowUpdateProfile] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef();
+  const menuRef = useRef(null);
   const [notifCount, setNotifCount] = useState(0);
+  const [suppressBadge, setSuppressBadge] = useState(false);
   const socketRef = useRef(null);
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const notifRef = useRef(null);
+  // track whether the dropdown was opened by an explicit user click
+  const openedByUserRef = useRef(false);
   // guard to prevent multiple concurrent mark-read requests
   const markReadInFlightRef = useRef(false);
+  // ids that were viewed locally (user opened dropdown or clicked item)
+  const viewedLocallyRef = useRef(new Set());
+  // signatures (logical keys) of notifications viewed locally — used to
+  // prevent the same logical notification (different ids) from reappearing
+  // when the server or socket later emits it.
+  const viewedSignaturesRef = useRef(new Set());
   // timestamp of last mark-read (ms) to avoid repeated sequential calls
   const lastMarkReadAtRef = useRef(0);
   // Helper to remove duplicates by id while preserving order (first occurrence wins)
   const uniqueById = (arr) =>
     Array.from(new Map(arr.map((i) => [i.id, i])).values());
   // signature to identify logically-equal notifications (may have different ids)
-  const notifSignature = (n) =>
-    `${n.fromUserId || ""}::${n.postId || ""}::${n.type || ""}::${
-      n.commentId || ""
-    }`;
+  const notifSignature = (n) => {
+    try {
+      const fromUserId =
+        n && n.fromUserId != null ? String(n.fromUserId).trim() : "";
+      const postId = n && n.postId != null ? String(n.postId).trim() : "";
+      const type =
+        n && n.type != null ? String(n.type).trim().toLowerCase() : "";
+      const commentId =
+        n && n.commentId != null ? String(n.commentId).trim() : "";
+      const commentText =
+        n && n.commentText
+          ? String(n.commentText).trim().toLowerCase().slice(0, 40)
+          : "";
+      // include a short snippet of commentText to disambiguate replies vs generic events
+      return `${fromUserId}::${postId}::${type}::${commentId}::${commentText}`;
+    } catch (e) {
+      return String(n && n.id) || "";
+    }
+  };
 
   const dedupeBySignature = (arr) => {
     const map = new Map();
@@ -70,6 +94,66 @@ function Header() {
       }
     }
     return Array.from(map.values());
+  };
+
+  // Mark a single notification as read when user clicks it
+  const handleNotificationItemClick = async (notif) => {
+    if (!notif) return;
+    // Only navigate on item click; do NOT mark as read here. The blue dot is
+    // the explicit control to mark a notification as read per UX request.
+    try {
+      if (notif.postId) {
+        window.dispatchEvent(
+          new CustomEvent("app:navigate:post", {
+            detail: { postId: notif.postId, commentId: notif.commentId },
+          })
+        );
+      }
+    } catch (e) {}
+  };
+
+  // Mark a single notification as read when user clicks the small blue dot
+  const handleDotClick = async (e, notif) => {
+    if (!notif) return;
+    // prevent the parent item click which also navigates
+    try {
+      e.stopPropagation();
+    } catch (err) {}
+    if (notif.read) return;
+
+    // immediate UI update
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n))
+    );
+    try {
+      viewedLocallyRef.current.add(String(notif.id));
+      try {
+        viewedSignaturesRef.current.add(notifSignature(notif));
+      } catch (e) {}
+    } catch (e) {}
+    setNotifCount((c) => Math.max(0, c - 1));
+
+    // persist to server
+    (async () => {
+      try {
+        const token = ctxToken || localStorage.getItem("token");
+        await fetch("http://localhost:5000/notifications/mark-read", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ notificationId: notif.id }),
+        });
+      } catch (err) {
+        console.warn("Failed to persist single notification read (dot)", err);
+        // revert optimistic update
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notif.id ? { ...n, read: false } : n))
+        );
+        setNotifCount((c) => c + 1);
+      }
+    })();
   };
   // Helper to compute timestamp and localized timeString without falling back to Date.now()
   const normalizeTimestamp = (maybeTs) => {
@@ -115,7 +199,10 @@ function Header() {
     let onLocalNotif = null;
     // Setup socket for notifications when user logs in
     if (!user) return;
-    const token = localStorage.getItem("token");
+    // Prefer token from AuthContext (ctxToken) because AuthContext may
+    // intentionally delay/avoid writing to localStorage for safety. Fall
+    // back to localStorage only if ctxToken is not available.
+    const token = ctxToken || localStorage.getItem("token");
     try {
       const socket = ioClient(SOCKET_URL, { auth: { token } });
       socketRef.current = socket;
@@ -171,7 +258,7 @@ function Header() {
       });
       socket.on("notification:new", (payload) => {
         console.log("Header received notification:new", payload);
-        // Ignore notifications generated by this same user (self-notifications)
+        // Ignore self-generated notifications
         try {
           if (
             payload &&
@@ -179,10 +266,8 @@ function Header() {
             user &&
             String(payload.fromUserId) === String(user.id)
           ) {
-            console.log("Header ignoring self-generated notification", payload);
             return;
           }
-          // If fromUserId is missing, also ignore when fromName matches current user
           if (
             payload &&
             (!payload.fromUserId ||
@@ -199,35 +284,47 @@ function Header() {
             const un = String(user.username || "")
               .trim()
               .toLowerCase();
-            if (n && (n === dn || n === un)) {
-              console.log(
-                "Header ignoring self-generated notification by name match",
-                payload
-              );
-              return;
-            }
+            if (n && (n === dn || n === un)) return;
           }
         } catch (e) {
-          // defensive: if user not ready, continue
+          // ignore
         }
+
         const fromName =
           payload.fromName || payload.from || payload.fromUserId || "Someone";
-        // be defensive: ensure we have a type so likes and comments don't clash
         const type = payload.type || "info";
-        // Prefer server-provided notifId or stable derived id. Avoid Date.now() so client reload
-        // doesn't produce a different id for the same logical notification.
         const notifId =
           payload.notifId ||
           payload.id ||
           `${payload.fromUserId || "anon"}-${
             payload.postId || "nopost"
           }-${type}-${payload.commentId || ""}-${payload.threadId || ""}`;
-        // Use server timestamp when present; do NOT generate a new timestamp on client.
         const { ts: payloadTs, timeString } = normalizeTimestamp(
           payload.timestamp || payload.createdAt
         );
+
+        const incomingReadFlag =
+          typeof payload.read === "boolean" ? payload.read : false;
+        const isReadFinal = incomingReadFlag; // do not auto-mark based on dropdown
+
+        try {
+          const payloadSig = notifSignature({
+            fromUserId: payload.fromUserId,
+            postId: payload.postId,
+            type,
+            commentId: payload.commentId,
+            commentText: payload.commentText,
+          });
+          if (viewedSignaturesRef.current.has(payloadSig)) {
+            console.debug(
+              "Skipping socket notification because signature was viewed locally",
+              payloadSig
+            );
+            return;
+          }
+        } catch (e) {}
+
         setNotifications((prev) => {
-          // dedupe only by notifId (allow multiple notifications for same thread)
           const existsById = prev.some((n) => n.id === notifId);
           if (existsById) {
             return prev.map((n) =>
@@ -235,13 +332,12 @@ function Header() {
                 ? {
                     ...n,
                     type,
-                    message: payload.message,
+                    message: payload.message || n.message,
                     timestamp:
                       payload.timestamp || n.timestamp || payloadTs || null,
-                    // preserve existing timeString when available to avoid replacing it
                     timeString:
                       n.timeString || timeString || n.timeString || null,
-                    read: false,
+                    read: isReadFinal,
                     commentId: payload.commentId || n.commentId,
                     threadId: payload.threadId || n.threadId,
                     commentText: payload.commentText || n.commentText,
@@ -249,10 +345,7 @@ function Header() {
                 : n
             );
           }
-          // Defensive: sometimes the server emits the same logical notification
-          // without a stable notifId (e.g. on reconnect). Try to match by a
-          // signature (fromUserId + postId + type) and update that entry
-          // instead of inserting a duplicate.
+
           const signatureIndex = prev.findIndex(
             (n) =>
               n.fromUserId === payload.fromUserId &&
@@ -260,7 +353,6 @@ function Header() {
               n.type === type
           );
           if (signatureIndex !== -1) {
-            // update existing entry in-place (preserve its id/timeString when present)
             const existing = prev[signatureIndex];
             const updated = {
               ...existing,
@@ -269,138 +361,34 @@ function Header() {
               timestamp:
                 payload.timestamp || existing.timestamp || payloadTs || null,
               timeString: existing.timeString || timeString || null,
-              read: false,
+              read: isReadFinal,
               commentId: payload.commentId || existing.commentId,
               threadId: payload.threadId || existing.threadId,
               commentText: payload.commentText || existing.commentText,
             };
             const copy = prev.slice();
             copy[signatureIndex] = updated;
-            // don't bump notifCount because it's an update to an existing notification
             return uniqueById(copy);
           }
-          setNotifCount((c) => c + 1);
-          return uniqueById([
-            {
-              id: notifId,
-              type,
-              message: payload.message,
-              from: fromName,
-              fromUserId: payload.fromUserId,
-              postId: payload.postId,
-              commentId: payload.commentId || null,
-              threadId: payload.threadId || null,
-              commentText: payload.commentText || null,
-              timestamp: payloadTs || null,
-              timeString: timeString || null,
-              read: false,
-            },
-            ...prev,
-          ]);
+
+          if (!isReadFinal) setNotifCount((c) => c + 1);
+          const newItem = {
+            id: notifId,
+            type,
+            message: payload.message,
+            from: fromName,
+            fromUserId: payload.fromUserId,
+            postId: payload.postId,
+            commentId: payload.commentId || null,
+            threadId: payload.threadId || null,
+            commentText: payload.commentText || null,
+            timestamp: payloadTs || null,
+            timeString: timeString || null,
+            read: isReadFinal,
+          };
+          return uniqueById(dedupeBySignature([newItem, ...(prev || [])]));
         });
       });
-
-      // Listen for local notification events dispatched from UI actions
-      onLocalNotif = (e) => {
-        const payload = e.detail || e;
-        if (!payload) return;
-        // Ignore local events that represent our own actions (self-notifications)
-        try {
-          if (
-            payload &&
-            typeof payload.fromUserId !== "undefined" &&
-            user &&
-            String(payload.fromUserId) === String(user.id)
-          ) {
-            console.log(
-              "Header ignoring local self-generated notification",
-              payload
-            );
-            return;
-          }
-          // Also ignore when fromName matches current user (fallback when fromUserId missing)
-          if (
-            payload &&
-            (!payload.fromUserId ||
-              typeof payload.fromUserId === "undefined") &&
-            payload.fromName &&
-            user
-          ) {
-            const n = String(payload.fromName || "")
-              .trim()
-              .toLowerCase();
-            const dn = String(user.displayName || "")
-              .trim()
-              .toLowerCase();
-            const un = String(user.username || "")
-              .trim()
-              .toLowerCase();
-            if (n && (n === dn || n === un)) {
-              console.log(
-                "Header ignoring local self-generated notification by name match",
-                payload
-              );
-              return;
-            }
-          }
-        } catch (err) {}
-        // Reuse same logic as socket notification:new handler
-        const fromName =
-          payload.fromName || payload.from || payload.fromUserId || "Someone";
-        const type = payload.type || "info";
-        const notifId =
-          payload.notifId ||
-          payload.id ||
-          `${payload.fromUserId || "anon"}-${
-            payload.postId || "nopost"
-          }-${type}-${payload.commentId || ""}-${payload.threadId || ""}`;
-        const { ts: localTs, timeString } = normalizeTimestamp(
-          payload.timestamp || payload.createdAt
-        );
-        setNotifications((prev) => {
-          const existsById = prev.some((n) => n.id === notifId);
-          if (existsById) return prev;
-          // also dedupe by signature in case server later emits without same id
-          const sigIndex = prev.findIndex(
-            (n) =>
-              n.fromUserId === payload.fromUserId &&
-              n.postId === payload.postId &&
-              n.type === type
-          );
-          if (sigIndex !== -1) {
-            const existing = prev[sigIndex];
-            const updated = {
-              ...existing,
-              message: payload.message || existing.message,
-              timestamp:
-                payload.timestamp || existing.timestamp || localTs || null,
-              timeString: existing.timeString || timeString || null,
-              read: false,
-            };
-            const copy = prev.slice();
-            copy[sigIndex] = updated;
-            return uniqueById(copy);
-          }
-          setNotifCount((c) => c + 1);
-          return uniqueById([
-            {
-              id: notifId,
-              type,
-              message: payload.message,
-              from: fromName,
-              fromUserId: payload.fromUserId,
-              postId: payload.postId,
-              commentId: payload.commentId || null,
-              threadId: payload.threadId || null,
-              commentText: payload.commentText || null,
-              timestamp: localTs || null,
-              timeString: timeString || null,
-              read: false,
-            },
-            ...prev,
-          ]);
-        });
-      };
       window.addEventListener("app:notification:new", onLocalNotif);
       // forward post likes updates to window so PostCard / Feed can listen
       socket.on("post:likes:update", (payload) => {
@@ -542,25 +530,42 @@ function Header() {
           setNotifications((prev) => {
             if (!payload) return prev;
             let newList = prev;
+            // If server provided explicit notifIds, only remove those exact ids.
+            // Compare as strings to avoid type mismatches (Neo4j integers etc).
             if (
               Array.isArray(payload.notifIds) &&
               payload.notifIds.length > 0
             ) {
-              const idsToRemove = new Set(payload.notifIds);
-              newList = prev.filter((n) => !idsToRemove.has(n.id));
+              // Server provided explicit notification ids that were deleted.
+              // Remove any local notification whose id matches — do not
+              // try to be too clever on the client-side. The server is
+              // authoritative for which Notification nodes were deleted
+              // (this happens on post delete), so remove them all locally.
+              const idsToRemove = new Set(
+                payload.notifIds.map((i) => String(i))
+              );
+              newList = prev.filter((n) => !idsToRemove.has(String(n.id)));
             } else if (payload.fromUserId && payload.postId && payload.type) {
+              // Fallback: remove only notifications that match the exact triple
+              // (fromUserId, postId, type) to avoid overly-broad removals.
               newList = prev.filter(
                 (n) =>
                   !(
-                    n.fromUserId === payload.fromUserId &&
-                    n.postId === payload.postId &&
+                    String(n.fromUserId) === String(payload.fromUserId) &&
+                    String(n.postId) === String(payload.postId) &&
                     n.type === payload.type
                   )
               );
             }
-            // update badge count accordingly
-            const removed = prev.length - newList.length;
-            if (removed > 0) setNotifCount((c) => Math.max(0, c - removed));
+
+            // Update badge count by the number of unread notifications that were removed
+            const removedUnread = prev.filter(
+              (n) =>
+                !n.read && !newList.some((m) => String(m.id) === String(n.id))
+            ).length;
+            if (removedUnread > 0)
+              setNotifCount((c) => Math.max(0, c - removedUnread));
+
             return uniqueById(newList);
           });
         } catch (e) {
@@ -586,12 +591,129 @@ function Header() {
     };
   }, [user]);
 
+  // Keep the unread badge count authoritative by deriving it from the
+  // current notifications array. This avoids races where different code
+  // paths increment/decrement the count and temporarily put it out of sync.
+  useEffect(() => {
+    try {
+      const unread = (notifications || []).filter((n) => !n.read).length;
+      setNotifCount(unread);
+    } catch (e) {
+      // defensive: do nothing on error
+    }
+  }, [notifications]);
+
+  // Polling fallback: fetch notifications every 5s to catch any missed realtime emits
+  useEffect(() => {
+    if (!user) return;
+    let mounted = true;
+    let pollIntervalId = null;
+    let pollingInFlight = false;
+    const poll = async () => {
+      if (!mounted) return;
+      if (pollingInFlight) return; // avoid overlapping polls
+      if (document && document.visibilityState !== "visible") return; // only poll when page visible
+      pollingInFlight = true;
+      try {
+        const token = ctxToken || localStorage.getItem("token");
+        const res = await fetch("http://localhost:5000/notifications", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!Array.isArray(data) || !mounted) return;
+        const normalized = data
+          .map((n) => {
+            const { ts, timeString } =
+              n.timestamp || n.timeString
+                ? {
+                    ts: n.timestamp == null ? null : Number(n.timestamp),
+                    timeString: n.timeString || null,
+                  }
+                : normalizeTimestamp(n.createdAt);
+            // if this id or logical signature was viewed locally, preserve read=true locally
+            const wasViewedLocally =
+              viewedLocallyRef.current.has(String(n.id)) ||
+              viewedSignaturesRef.current.has(notifSignature(n));
+            return {
+              id: n.id,
+              type: n.type,
+              message: n.message,
+              from: n.fromName || n.from || "Someone",
+              fromUserId: n.fromUserId,
+              postId: n.postId,
+              commentId: n.commentId || null,
+              threadId: n.threadId || null,
+              commentText: n.commentText || null,
+              timestamp: ts || null,
+              timeString: timeString || null,
+              read: wasViewedLocally ? true : n.read === true,
+            };
+          })
+          .sort((a, b) => {
+            if (a.timestamp == null && b.timestamp == null) return 0;
+            if (a.timestamp == null) return 1;
+            if (b.timestamp == null) return -1;
+            return Number(b.timestamp) - Number(a.timestamp);
+          });
+
+        // Merge server list with local realtime list, preferring server data for authoritative fields
+        // remove any normalized items that have been viewed logically
+        const filtered = normalized.filter(
+          (n) => !viewedSignaturesRef.current.has(notifSignature(n))
+        );
+        setNotifications((prev) =>
+          uniqueById(dedupeBySignature([...filtered, ...(prev || [])]))
+        );
+        const unread = normalized.filter((n) => !n.read).length;
+        setNotifCount(unread);
+      } catch (e) {
+        console.warn("Polling notifications failed", e);
+      } finally {
+        pollingInFlight = false;
+      }
+    };
+
+    const startPolling = () => {
+      if (pollIntervalId) return;
+      // run immediately then every 15s when visible
+      poll();
+      pollIntervalId = setInterval(poll, 15000);
+    };
+
+    const stopPolling = () => {
+      if (pollIntervalId) {
+        clearInterval(pollIntervalId);
+        pollIntervalId = null;
+      }
+    };
+
+    // Start only when page is visible
+    if (typeof document !== "undefined") {
+      if (document.visibilityState === "visible") startPolling();
+      const onVisibility = () => {
+        if (document.visibilityState === "visible") startPolling();
+        else stopPolling();
+      };
+      document.addEventListener("visibilitychange", onVisibility);
+      return () => {
+        mounted = false;
+        stopPolling();
+        document.removeEventListener("visibilitychange", onVisibility);
+      };
+    }
+    return () => {
+      mounted = false;
+      stopPolling();
+    };
+  }, [user, ctxToken]);
+
   // Hydrate persisted notifications from server when user logs in
   useEffect(() => {
     if (!user) return;
     (async () => {
       try {
-        const token = localStorage.getItem("token");
+        const token = ctxToken || localStorage.getItem("token");
         const res = await fetch("http://localhost:5000/notifications", {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -619,6 +741,9 @@ function Header() {
                 (x) => notifSignature(x) === notifSignature(n)
               );
               const existing = existingById || existingBySig || null;
+              const wasViewedLocally = viewedLocallyRef.current.has(
+                String(n.id)
+              );
               return {
                 id: n.id,
                 type: n.type,
@@ -626,12 +751,14 @@ function Header() {
                 from: n.fromName || n.from || "Someone",
                 fromUserId: n.fromUserId,
                 postId: n.postId,
+                commentText:
+                  n.commentText || (existing && existing.commentText) || null,
                 commentId: n.commentId || null,
                 threadId: n.threadId || null,
                 timestamp: ts || (existing && existing.timestamp) || null,
                 timeString:
                   timeString || (existing && existing.timeString) || null,
-                read: n.read === true, // respect persisted read flag if present
+                read: wasViewedLocally ? true : n.read === true, // respect persisted read but prefer local view
               };
             })
             .sort((a, b) => {
@@ -642,7 +769,12 @@ function Header() {
               return Number(b.timestamp) - Number(a.timestamp);
             });
 
-          setNotifications(uniqueById(dedupeBySignature(normalized)));
+          // Filter out any normalized items whose logical signature was
+          // already viewed locally so they don't reappear briefly.
+          const filtered = normalized.filter(
+            (n) => !viewedSignaturesRef.current.has(notifSignature(n))
+          );
+          setNotifications(uniqueById(dedupeBySignature(filtered)));
 
           // Compute unread count from persisted read flags when available, otherwise fall back to total
           const unread = normalized.filter((n) => !n.read).length;
@@ -669,207 +801,13 @@ function Header() {
   // ...existing code...
 
   const handleNotificationClick = () => {
+    // Only toggle the dropdown on bell clicks. Do NOT mark notifications
+    // as read just by opening/closing the dropdown. The small blue dot
+    // remains the explicit control for marking a single notification read.
     const willOpen = !showNotifications;
     setShowNotifications(willOpen);
-    if (willOpen) {
-      // don't send mark-read if there are no unread notifications locally
-      const unreadLocal = (notifications || []).filter((n) => !n.read).length;
-      if (unreadLocal === 0) {
-        // No unread notifications: open the dropdown but skip mark-read work.
-        // Avoid noisy logs on each click.
-        return; // keep dropdown open but don't proceed with mark-read logic
-      }
-      // short cooldown: skip marking-read if we did this in the last 2s
-      const now = Date.now();
-      if (now - lastMarkReadAtRef.current < 2000) {
-        console.log("Header: skipping mark-read due to cooldown");
-        return;
-      }
-      // Mark all as read locally first for immediate UI feedback
-      setNotifCount(0);
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-
-      // Immediately refresh persisted notifications from server so UI reflects
-      // exactly what exists in the database (handles case where multiple
-      // Notification nodes were created server-side).
-      (async () => {
-        try {
-          const token = localStorage.getItem("token");
-          const listRes = await fetch("http://localhost:5000/notifications", {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (listRes.ok) {
-            const listData = await listRes.json();
-            if (Array.isArray(listData)) {
-              const normalized = listData
-                .map((n) => {
-                  const { ts, timeString } =
-                    n.timestamp || n.timeString
-                      ? {
-                          ts: n.timestamp == null ? null : Number(n.timestamp),
-                          timeString: n.timeString || null,
-                        }
-                      : normalizeTimestamp(n.createdAt);
-                  const existingById = (notifications || []).find(
-                    (x) => x.id === n.id
-                  );
-                  const existingBySig = (notifications || []).find(
-                    (x) => notifSignature(x) === notifSignature(n)
-                  );
-                  const existing = existingById || existingBySig || null;
-                  return {
-                    id: n.id,
-                    type: n.type,
-                    message: n.message,
-                    from: n.fromName || n.from || "Someone",
-                    fromUserId: n.fromUserId,
-                    postId: n.postId,
-                    commentId: n.commentId || null,
-                    threadId: n.threadId || null,
-                    commentText: n.commentText || null,
-                    timestamp: ts || (existing && existing.timestamp) || null,
-                    // fixed localized string so UI doesn't reformat on every render
-                    timeString:
-                      timeString || (existing && existing.timeString) || null,
-                    read: n.read === true,
-                  };
-                })
-                .sort((a, b) => {
-                  if (a.timestamp == null && b.timestamp == null) return 0;
-                  if (a.timestamp == null) return 1;
-                  if (b.timestamp == null) return -1;
-                  return Number(b.timestamp) - Number(a.timestamp);
-                });
-
-              setNotifications(uniqueById(dedupeBySignature(normalized)));
-              const unread = normalized.filter((x) => !x.read).length;
-              setNotifCount(unread);
-            }
-          }
-        } catch (e) {
-          // ignore fetch errors here — we already updated local state optimistically
-          console.warn("Failed to refresh notifications on open", e);
-        }
-      })();
-
-      // Persist to server and verify success
-      (async () => {
-        // avoid sending multiple mark-read requests in parallel
-        if (markReadInFlightRef.current) return;
-        markReadInFlightRef.current = true;
-        // record the attempt timestamp so subsequent opens within cooldown skip
-        lastMarkReadAtRef.current = Date.now();
-        try {
-          const token = localStorage.getItem("token");
-          const resp = await fetch(
-            "http://localhost:5000/notifications/mark-read",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({}),
-            }
-          );
-
-          if (!resp.ok) {
-            console.error("Mark-read failed:", resp.status);
-            // Revert local state if server call failed
-            setNotifCount(
-              (prev) => notifications.filter((n) => !n.read).length
-            );
-            setNotifications((prev) =>
-              prev.map((n) => ({ ...n, read: false }))
-            );
-            return;
-          }
-
-          const json = await resp.json();
-          console.log("/notifications/mark-read response:", resp.status, json);
-
-          // Verify server actually updated notifications
-          if (json.updated === 0 && notifications.length > 0) {
-            console.warn(
-              "Server marked 0 notifications as read - may need to reload"
-            );
-            // Force a fresh fetch to sync with server state
-            setTimeout(async () => {
-              try {
-                const freshResp = await fetch(
-                  "http://localhost:5000/notifications",
-                  {
-                    headers: { Authorization: `Bearer ${token}` },
-                  }
-                );
-                if (freshResp.ok) {
-                  const freshData = await freshResp.json();
-                  const freshNormalized = freshData
-                    .map((n) => {
-                      const { ts, timeString } =
-                        n.timestamp || n.timeString
-                          ? {
-                              ts:
-                                n.timestamp == null
-                                  ? null
-                                  : Number(n.timestamp),
-                              timeString: n.timeString || null,
-                            }
-                          : normalizeTimestamp(n.createdAt);
-                      const existingById = (notifications || []).find(
-                        (x) => x.id === n.id
-                      );
-                      const existingBySig = (notifications || []).find(
-                        (x) => notifSignature(x) === notifSignature(n)
-                      );
-                      const existing = existingById || existingBySig || null;
-                      return {
-                        id: n.id,
-                        type: n.type,
-                        message: n.message,
-                        from: n.fromName || n.from || "Someone",
-                        fromUserId: n.fromUserId,
-                        postId: n.postId,
-                        timestamp:
-                          ts || (existing && existing.timestamp) || null,
-                        // store fixed localized display string
-                        timeString:
-                          timeString ||
-                          (existing && existing.timeString) ||
-                          null,
-                        read: n.read === true,
-                      };
-                    })
-                    .sort((a, b) => {
-                      if (a.timestamp == null && b.timestamp == null) return 0;
-                      if (a.timestamp == null) return 1;
-                      if (b.timestamp == null) return -1;
-                      return Number(b.timestamp) - Number(a.timestamp);
-                    });
-
-                  setNotifications(
-                    uniqueById(dedupeBySignature(freshNormalized))
-                  );
-                  const unread = freshNormalized.filter((n) => !n.read).length;
-                  setNotifCount(unread);
-                  console.log("Synced with server - unread count:", unread);
-                }
-              } catch (e) {
-                console.warn("Failed to sync with server after mark-read", e);
-              }
-            }, 500);
-          }
-        } catch (e) {
-          console.warn("Failed to persist notifications read state", e);
-          // Revert local state on error
-          setNotifCount((prev) => notifications.filter((n) => !n.read).length);
-          setNotifications((prev) => prev.map((n) => ({ ...n, read: false })));
-        } finally {
-          // Clear the in-flight flag so subsequent opens can retry
-          markReadInFlightRef.current = false;
-        }
-      })();
-    }
+    openedByUserRef.current = willOpen;
+    // Do not modify notifications, viewedLocally, signatures, or call server.
   };
 
   // Close notifications dropdown when clicking outside
@@ -877,26 +815,18 @@ function Header() {
     function handleClickOutside(event) {
       if (notifRef.current && !notifRef.current.contains(event.target)) {
         setShowNotifications(false);
+        // reset user-open tracking when dropdown closes due to outside click
+        openedByUserRef.current = false;
       }
     }
     if (showNotifications) {
       document.addEventListener("mousedown", handleClickOutside);
-      return () =>
+      return () => {
         document.removeEventListener("mousedown", handleClickOutside);
+      };
     }
+    return () => {};
   }, [showNotifications]);
-
-  // track whether the feed (home) section is visible so the Home icon can show active state
-  useEffect(() => {
-    // For now, always keep Home active since user is on home page
-    // In future, this could change based on different pages/routes
-    setIsHomeActive(true);
-  }, []);
-
-  // When a user logs in, the feed is the default/home view — mark Home active
-  useEffect(() => {
-    if (user) setIsHomeActive(true);
-  }, [user]);
 
   // When connections modal opens, mark + button active and unset Home
   useEffect(() => {
@@ -955,21 +885,13 @@ function Header() {
                       : "text-gray-600 hover:text-blue-600 hover:bg-gray-100"
                   }`}
                   onClick={() => {
-                    try {
-                      // notify app that Home was requested (refresh feed if needed)
-                      window.dispatchEvent(
-                        new CustomEvent("app:navigate:home")
-                      );
-                    } catch (e) {
-                      console.warn("Failed to navigate home", e);
-                    }
+                    setIsHomeActive(true);
+                    setShowChat(false);
+                    setShowConnections(false);
+                    openedByUserRef.current = false;
                   }}
                 >
-                  {isHomeActive ? (
-                    <FaHome className="w-5 h-5" />
-                  ) : (
-                    <AiOutlineHome className="w-5 h-5" />
-                  )}
+                  <AiOutlineHome className="w-5 h-5" />
                 </button>
 
                 <button
@@ -1038,11 +960,18 @@ function Header() {
                           {notifications.map((notif) => (
                             <div
                               key={notif.id}
-                              className={`px-4 py-3 border-b last:border-b-0 transition-colors flex items-start gap-3 ${
+                              onClick={() => handleNotificationItemClick(notif)}
+                              role="button"
+                              tabIndex={0}
+                              className={`px-4 py-3 border-b last:border-b-0 transition-colors flex items-start gap-3 cursor-pointer ${
                                 !notif.read
                                   ? "bg-gradient-to-r from-blue-50 to-white border-l-4 border-blue-400"
                                   : "hover:bg-gray-50"
                               }`}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ")
+                                  handleNotificationItemClick(notif);
+                              }}
                             >
                               <div className="w-12 h-12 bg-gradient-to-r from-pink-400 to-red-400 rounded-full flex items-center justify-center text-white font-bold text-base flex-shrink-0 shadow-md">
                                 ❤️
@@ -1084,7 +1013,12 @@ function Header() {
                                 </p>
                               </div>
                               {!notif.read && (
-                                <div className="w-3 h-3 bg-blue-600 rounded-full flex-shrink-0 mt-2 shadow-sm" />
+                                <button
+                                  onClick={(e) => handleDotClick(e, notif)}
+                                  className="w-3 h-3 bg-blue-600 rounded-full flex-shrink-0 mt-2 shadow-sm border-0"
+                                  aria-label="Đánh dấu đã xem"
+                                  title="Đánh dấu đã xem"
+                                />
                               )}
                             </div>
                           ))}

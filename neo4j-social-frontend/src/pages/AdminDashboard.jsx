@@ -25,6 +25,7 @@ import { useAuth } from "../components/AuthContext";
 import ioClient from "socket.io-client";
 import { SOCKET_URL } from "../config.js";
 import AdminDashboardMenu from "./AdminDashboardMenu";
+import AdminPosts from "./AdminPosts";
 
 const StatCard = ({ colorClass, title, value, icon }) => (
   <div className={`p-6 rounded-lg ${colorClass} text-white shadow-sm w-full`}>
@@ -148,7 +149,7 @@ export default function AdminDashboard() {
     avatar:
       u.avatarUrl && u.avatarUrl.startsWith("/")
         ? `${window.location.origin}${u.avatarUrl}`
-        : u.avatarUrl || "/public/default-avatar.png",
+        : u.avatarUrl || "/default-avatar.png",
     followers:
       typeof u.followers === "number" ? u.followers : Number(u.followers) || 0,
   }));
@@ -218,6 +219,10 @@ export default function AdminDashboard() {
     return typeof val === "number" ? val : 0;
   }
 
+  // current path for sidebar active state
+  const currentPath =
+    typeof window !== "undefined" ? window.location.pathname : "";
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="flex">
@@ -226,28 +231,35 @@ export default function AdminDashboard() {
           <div className="px-6 py-8 flex-1 flex flex-col justify-between">
             <div>
               <div className="flex items-center gap-3 mb-8">
-                <div className="w-12 h-12 rounded-full border-2 border-white flex items-center justify-center">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-6 w-6 text-white"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 11c0 1.657-1.343 3-3 3S6 12.657 6 11s1.343-3 3-3 3 1.343 3 3z"
-                    />
-                  </svg>
+                <div className="w-12 h-12 rounded-full flex items-center justify-center overflow-hidden">
+                  <img
+                    src="/logo.png"
+                    alt="Admin logo"
+                    className="w-10 h-10 object-contain"
+                    onError={(e) => {
+                      try {
+                        e.target.onerror = null;
+                        e.target.src = "/admin-logo.svg";
+                      } catch {}
+                    }}
+                  />
                 </div>
-                <div className="text-lg font-semibold">LOGO</div>
+                <div className="text-lg font-semibold">
+                  Mạng xã hội Mini Big data
+                </div>
               </div>
 
               <nav className="mt-6">
                 <ul className="mt-2 space-y-4">
-                  <li className="flex items-center gap-4 px-4 py-3 rounded-xl bg-blue-600">
+                  <li
+                    onClick={() => (window.location.pathname = "/admin")}
+                    className={
+                      "flex items-center gap-4 px-4 py-3 rounded-xl cursor-pointer " +
+                      (currentPath === "/admin" || currentPath === "/admin/"
+                        ? "bg-blue-600"
+                        : "hover:bg-blue-700/60")
+                    }
+                  >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
                       className="h-6 w-6 opacity-90"
@@ -265,7 +277,15 @@ export default function AdminDashboard() {
                     <span className="text-sm font-medium">Bảng điều khiển</span>
                   </li>
 
-                  <li className="flex items-center gap-4 px-4 py-3 rounded-lg hover:bg-blue-700/60">
+                  <li
+                    onClick={() => (window.location.pathname = "/admin/posts")}
+                    className={
+                      "flex items-center gap-4 px-4 py-3 rounded-lg cursor-pointer " +
+                      (currentPath === "/admin/posts"
+                        ? "bg-blue-600"
+                        : "hover:bg-blue-700/60")
+                    }
+                  >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
                       className="h-6 w-6 opacity-90"
@@ -353,197 +373,206 @@ export default function AdminDashboard() {
         {/* Main content */}
         <main className="flex-1 p-6 md:ml-96">
           <div className="max-w-7xl ml-8">
-            <div className="flex items-center justify-between mb-6">
-              <h1 className="text-3xl font-bold text-gray-900">DASHBOARD</h1>
-              <div className="relative">
-                {/* Avatar dropdown cho admin */}
-                <AdminDashboardMenu logout={logout} admin={user} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8 md:ml-auto md:mr-8">
-              <StatCard
-                colorClass="bg-blue-600"
-                title="Người Dùng"
-                value={toNumber(stats.users)}
-                icon={
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-8 w-8"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M5.121 17.804A9 9 0 1118.879 6.196 9 9 0 015.12 17.804z"
-                    />
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                    />
-                  </svg>
-                }
-              />
-              <StatCard
-                colorClass="bg-red-500"
-                title="Bài Viết"
-                value={toNumber(stats.posts)}
-                icon={
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-8 w-8"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M7 8h10M7 12h6m-6 4h10M5 6h14a1 1 0 011 1v10a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1z"
-                    />
-                  </svg>
-                }
-              />
-              <StatCard
-                colorClass="bg-green-600"
-                title="Bình Luận"
-                value={toNumber(stats.comments)}
-                icon={
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-8 w-8"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4-.8L3 20l1.2-3.8A7.963 7.963 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                    />
-                  </svg>
-                }
-              />
-              <StatCard
-                colorClass="bg-orange-500"
-                title="Lượt Thích"
-                value={toNumber(stats.likes)}
-                icon={
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-8 w-8"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M4.318 6.318a4.5 4.5 0 016.364 0L12 7.636l1.318-1.318a4.5 4.5 0 116.364 6.364L12 21.364 4.318 12.682a4.5 4.5 0 010-6.364z"
-                    />
-                  </svg>
-                }
-              />
-              <StatCard
-                colorClass="bg-indigo-600"
-                title="Tin Nhắn"
-                value={toNumber(stats.messages)}
-                icon={
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-8 w-8"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={1.5}
-                      d="M7 8h10M7 12h6m-6 4h10M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4-.8L3 20l1.2-3.8A7.963 7.963 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                    />
-                  </svg>
-                }
-              />
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Left: large User Growth card */}
-              <div className="lg:col-span-2 bg-white rounded-xl p-6 shadow-sm min-h-[500px]">
-                <h3 className="text-xl font-semibold text-gray-800 mb-4">
-                  User Growth
-                </h3>
-                <div className="h-[460px] rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400">
-                  {trendData ? (
-                    <Line
-                      options={{
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: { legend: { display: false } },
-                      }}
-                      data={{
-                        labels: trendData.map((p) => p.date),
-                        datasets: [
-                          {
-                            label: "Users",
-                            data: trendData.map((p) => p.users),
-                            borderColor: "#2563eb",
-                            backgroundColor: "rgba(37,99,235,0.1)",
-                            tension: 0.3,
-                          },
-                        ],
-                      }}
-                    />
-                  ) : (
-                    "Chart placeholder"
-                  )}
-                </div>
-              </div>
-
-              {/* Right: stacked cards */}
-              <div className="flex flex-col gap-6">
-                <div className="bg-white rounded-xl p-6 shadow-sm">
-                  <h3 className="text-xl font-semibold text-gray-800 mb-4">
-                    Hoạt động hàng đầu
-                  </h3>
-                  <div className="space-y-2">
-                    {topUsers.map((u) => (
-                      <ActivityItem
-                        key={u.id}
-                        avatar={u.avatar}
-                        name={u.name}
-                        followers={u.followers}
-                      />
-                    ))}
+            {typeof window !== "undefined" &&
+            window.location.pathname === "/admin/posts" ? (
+              <AdminPosts />
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-6">
+                  <h1 className="text-3xl font-bold text-gray-900">
+                    BẢNG ĐIỀU KHIỂN
+                  </h1>
+                  <div className="relative">
+                    {/* Avatar dropdown cho admin */}
+                    <AdminDashboardMenu logout={logout} admin={user} />
                   </div>
                 </div>
 
-                <div className="bg-white rounded-xl p-6 shadow-sm">
-                  <h3 className="text-xl font-semibold text-gray-800 mb-4">
-                    Bài viết tương tác nhiều
-                  </h3>
-                  <div className="space-y-2">
-                    {topPosts.map((p) => (
-                      <PostItem
-                        key={p.id}
-                        author={p.author}
-                        title={p.title}
-                        interactions={p.interactions}
-                        onClick={() => setModalPost(p)}
-                      />
-                    ))}
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-8 md:ml-auto md:mr-8">
+                  <StatCard
+                    colorClass="bg-blue-600"
+                    title="Người Dùng"
+                    value={toNumber(stats.users)}
+                    icon={
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-8 w-8"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M5.121 17.804A9 9 0 1118.879 6.196 9 9 0 015.12 17.804z"
+                        />
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                        />
+                      </svg>
+                    }
+                  />
+                  <StatCard
+                    colorClass="bg-red-500"
+                    title="Bài Viết"
+                    value={toNumber(stats.posts)}
+                    icon={
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-8 w-8"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M7 8h10M7 12h6m-6 4h10M5 6h14a1 1 0 011 1v10a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1z"
+                        />
+                      </svg>
+                    }
+                  />
+                  <StatCard
+                    colorClass="bg-green-600"
+                    title="Bình Luận"
+                    value={toNumber(stats.comments)}
+                    icon={
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-8 w-8"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4-.8L3 20l1.2-3.8A7.963 7.963 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                        />
+                      </svg>
+                    }
+                  />
+                  <StatCard
+                    colorClass="bg-orange-500"
+                    title="Lượt Thích"
+                    value={toNumber(stats.likes)}
+                    icon={
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-8 w-8"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M4.318 6.318a4.5 4.5 0 016.364 0L12 7.636l1.318-1.318a4.5 4.5 0 116.364 6.364L12 21.364 4.318 12.682a4.5 4.5 0 010-6.364z"
+                        />
+                      </svg>
+                    }
+                  />
+                  <StatCard
+                    colorClass="bg-indigo-600"
+                    title="Tin Nhắn"
+                    value={toNumber(stats.messages)}
+                    icon={
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-8 w-8"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={1.5}
+                          d="M7 8h10M7 12h6m-6 4h10M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4-.8L3 20l1.2-3.8A7.963 7.963 0 013 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                        />
+                      </svg>
+                    }
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                  {/* Left: large User Growth card */}
+                  <div className="lg:col-span-2 bg-white rounded-xl p-6 shadow-sm min-h-[500px]">
+                    <h3 className="text-xl font-semibold text-gray-800 mb-4">
+                      Tăng trưởng người dùng
+                    </h3>
+                    <div className="h-[460px] rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400">
+                      {trendData ? (
+                        <Line
+                          options={{
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { display: false } },
+                          }}
+                          data={{
+                            labels: trendData.map((p) => p.date),
+                            datasets: [
+                              {
+                                label: "Users",
+                                data: trendData.map((p) => p.users),
+                                borderColor: "#2563eb",
+                                backgroundColor: "rgba(37,99,235,0.1)",
+                                tension: 0.3,
+                              },
+                            ],
+                          }}
+                        />
+                      ) : (
+                        "Chart placeholder"
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Right: stacked cards */}
+                  <div className="flex flex-col gap-6">
+                    <div className="bg-white rounded-xl p-6 shadow-sm">
+                      <h3 className="text-xl font-semibold text-gray-800 mb-4">
+                        Hoạt động hàng đầu
+                      </h3>
+                      <div className="space-y-2">
+                        {topUsers.map((u) => (
+                          <ActivityItem
+                            key={u.id}
+                            avatar={u.avatar}
+                            name={u.name}
+                            followers={u.followers}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl p-6 shadow-sm">
+                      <h3 className="text-xl font-semibold text-gray-800 mb-4">
+                        Bài viết tương tác nhiều
+                      </h3>
+                      <div className="space-y-2">
+                        {topPosts.map((p) => (
+                          <PostItem
+                            key={p.id}
+                            author={p.author}
+                            title={p.title}
+                            interactions={p.interactions}
+                            onClick={() => setModalPost(p)}
+                          />
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
         </main>
         {modalPost && (

@@ -184,3 +184,207 @@ router.post(
 );
 
 export default router;
+
+// --- Admin post management endpoints ---
+// Note: these are exported in the same router file and are protected by verifyToken and admin role checks above
+
+// GET /admin/posts?q=...  - list posts (admin view)
+router.get("/posts", verifyToken, async (req, res) => {
+  if (req.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+  const qParam = req.query.q || "";
+  const session = driver.session();
+  try {
+    const q = `
+        MATCH (author:User)-[:POSTED]->(p:Post)
+        WHERE toLower(p.title) CONTAINS toLower($q) OR toLower(p.content) CONTAINS toLower($q)
+        OPTIONAL MATCH (p)<-[:LIKES]-(liker:User)
+        RETURN author, p, COUNT(liker) AS likesCount
+        ORDER BY p.createdAt DESC LIMIT 200
+      `;
+    const result = await session.run(q, { q: qParam });
+    const posts = result.records.map((r) => {
+      const author = r.get("author").properties;
+      delete author.passwordHash;
+      const p = r.get("p").properties;
+      return {
+        id: p.id,
+        title: p.title || "",
+        content: p.content || "",
+        imageUrl: p.imageUrl || "",
+        authorName: author.displayName || author.username,
+        hidden: p.hidden === true || p.hidden === "true",
+        createdAt: p.createdAt,
+      };
+    });
+    res.json({ data: posts });
+  } catch (err) {
+    console.error("[ADMIN /posts] Error:", err);
+    res.status(500).json({ error: "Failed to fetch posts" });
+  } finally {
+    await session.close();
+  }
+});
+
+// DEV-ONLY: public posts list for debugging admin UI (no auth) - remove in production
+router.get("/posts/public", async (req, res) => {
+  const qParam = req.query.q || "";
+  const session = driver.session();
+  try {
+    const q = `
+      MATCH (author:User)-[:POSTED]->(p:Post)
+      WHERE toLower(p.title) CONTAINS toLower($q) OR toLower(p.content) CONTAINS toLower($q)
+      OPTIONAL MATCH (p)<-[:LIKES]-(liker:User)
+      RETURN author, p, COUNT(liker) AS likesCount
+      ORDER BY p.createdAt DESC LIMIT 200
+    `;
+    const result = await session.run(q, { q: qParam });
+    const posts = result.records.map((r) => {
+      const author = r.get("author").properties;
+      delete author.passwordHash;
+      const p = r.get("p").properties;
+      return {
+        id: p.id,
+        title: p.title || "",
+        content: p.content || "",
+        imageUrl: p.imageUrl || "",
+        authorName: author.displayName || author.username,
+        hidden: p.hidden === true || p.hidden === "true",
+        createdAt: p.createdAt,
+      };
+    });
+    res.json({ data: posts });
+  } catch (err) {
+    console.error("[ADMIN /posts/public] Error:", err);
+    res.status(500).json({ error: "Failed to fetch posts" });
+  } finally {
+    await session.close();
+  }
+});
+
+// DEV-ONLY: return all Post nodes (raw) for debugging - shows properties even if no POSTED relationship
+router.get("/posts/all", async (req, res) => {
+  const session = driver.session();
+  try {
+    const q = `
+      MATCH (p:Post)
+      OPTIONAL MATCH (author)-[:POSTED]->(p)
+      RETURN p, author LIMIT 500
+    `;
+    const result = await session.run(q, {});
+    const posts = result.records.map((r) => {
+      const pnode = r.get("p");
+      const authorNode = r.get("author");
+      const p = pnode && pnode.properties ? pnode.properties : {};
+      const author =
+        authorNode && authorNode.properties ? authorNode.properties : null;
+      if (author && author.passwordHash) delete author.passwordHash;
+      return { post: p, author };
+    });
+    res.json({ data: posts });
+  } catch (err) {
+    console.error("[ADMIN /posts/all] Error:", err);
+    res.status(500).json({ error: "Failed to fetch all posts" });
+  } finally {
+    await session.close();
+  }
+});
+
+// DELETE /admin/posts/:postId - admin-level delete (force delete any post)
+router.delete("/posts/:postId", verifyToken, async (req, res) => {
+  // Admin deletions are intentionally disabled. Do not allow admins to forcibly delete
+  // posts from the server-side. Authors who own posts may still delete their own posts
+  // using the author-only endpoint under /posts/delete/:postId which enforces authorship.
+  if (req.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+  console.warn(
+    `Admin delete attempt blocked: user=${req.userId}, ip=${req.ip}`
+  );
+  return res.status(403).json({
+    error:
+      "Admin-level deletion of posts has been disabled. Please use the hide/take-down feature instead.",
+  });
+});
+
+// POST /admin/posts/:postId/hide - toggle hidden flag
+router.post("/posts/:postId/hide", verifyToken, async (req, res) => {
+  if (req.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+  const { postId } = req.params;
+  const { hidden } = req.body; // optional boolean to explicitly set
+  const session = driver.session();
+  try {
+    let result = null;
+    if (typeof hidden !== "undefined") {
+      result = await session.run(
+        `MATCH (author:User)-[:POSTED]->(p:Post {id:$postId}) SET p.hidden = $hidden RETURN author, p`,
+        { postId, hidden }
+      );
+    } else {
+      // toggle
+      result = await session.run(
+        `MATCH (author:User)-[:POSTED]->(p:Post {id:$postId}) SET p.hidden = coalesce(NOT p.hidden, true) RETURN author, p`,
+        { postId }
+      );
+    }
+
+    // Prepare realtime payload and emit so clients update immediately
+    try {
+      if (result && result.records && result.records.length > 0) {
+        const rec = result.records[0];
+        const authorNode = rec.get("author");
+        const pNode = rec.get("p");
+        const author =
+          authorNode && authorNode.properties ? authorNode.properties : null;
+        const p = pNode && pNode.properties ? pNode.properties : null;
+        const payload = {
+          postId: p ? p.id : postId,
+          post: p || { id: postId },
+          author: author || null,
+        };
+        const io = req.app && req.app.locals && req.app.locals.io;
+        if (io) {
+          try {
+            io.emit("post:updated", payload);
+            console.log(
+              `[ADMIN HIDE POST] Emitted post:updated for post=${payload.postId}`
+            );
+          } catch (emitErr) {
+            console.warn(
+              "[ADMIN HIDE POST] Failed to emit post:updated",
+              emitErr
+            );
+          }
+        }
+      } else {
+        // Fallback: try to emit minimal payload with postId only
+        const io = req.app && req.app.locals && req.app.locals.io;
+        if (io) {
+          try {
+            io.emit("post:updated", {
+              postId,
+              post: {
+                id: postId,
+                hidden: typeof hidden !== "undefined" ? hidden : true,
+              },
+            });
+            console.log(
+              `[ADMIN HIDE POST] Emitted post:updated (fallback) for post=${postId}`
+            );
+          } catch (emitErr) {
+            console.warn(
+              "[ADMIN HIDE POST] Failed to emit fallback post:updated",
+              emitErr
+            );
+          }
+        }
+      }
+    } catch (emitOuter) {
+      console.warn("[ADMIN HIDE POST] Realtime emit error:", emitOuter);
+    }
+
+    res.json({ message: "Updated hidden state" });
+  } catch (err) {
+    console.error("[ADMIN HIDE POST]", err);
+    res.status(500).json({ error: "Failed to update post hidden state" });
+  } finally {
+    await session.close();
+  }
+});

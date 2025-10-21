@@ -37,7 +37,7 @@ export default function AdminDashboardMenu({ logout, admin }) {
           <img
             src={(() => {
               const av = admin?.avatarUrl;
-              if (!av) return "/public/default-avatar.png";
+              if (!av) return "/default-avatar.png";
               try {
                 if (String(av).startsWith("http"))
                   return (
@@ -51,14 +51,14 @@ export default function AdminDashboardMenu({ logout, admin }) {
                   Date.now()
                 );
               } catch (e) {
-                return "/public/default-avatar.png";
+                return "/default-avatar.png";
               }
             })()}
             alt="avatar"
             className="w-8 h-8 rounded-full object-cover"
             onError={(e) => {
               e.target.onerror = null;
-              e.target.src = "/public/default-avatar.png";
+              e.target.src = "/default-avatar.png";
             }}
           />
           <svg

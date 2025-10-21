@@ -1,0 +1,296 @@
+import React, { useEffect, useState } from "react";
+import { fetchAdminPosts, hideAdminPost } from "../services/adminApi";
+import ioClient from "socket.io-client";
+import { SOCKET_URL } from "../config.js";
+
+export default function AdminPosts() {
+  const [q, setQ] = useState("");
+  const [posts, setPosts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [selectedPost, setSelectedPost] = useState(null);
+
+  const openModal = (post) => setSelectedPost(post);
+  const closeModal = () => setSelectedPost(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchAdminPosts({ q });
+      // normalize various response shapes:
+      // - axios response where res.data is an object { data: [...] }
+      // - axios response where res.data is an array
+      // - older shape res.data.posts
+      const payload = res && res.data !== undefined ? res.data : res;
+      let items = [];
+      if (Array.isArray(payload)) items = payload;
+      else if (Array.isArray(payload.data)) items = payload.data;
+      else if (Array.isArray(payload.posts)) items = payload.posts;
+      else items = [];
+      setPosts(items);
+    } catch (e) {
+      const msg =
+        e && e.response && e.response.data && e.response.data.error
+          ? e.response.data.error
+          : e.message || "Không thể tải danh sách bài viết";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // Setup realtime updates so admin list refreshes when posts change
+    try {
+      const token = localStorage.getItem("token");
+      if (token) {
+        const socket = ioClient(SOCKET_URL, { auth: { token } });
+        socket.on("connect", () =>
+          console.log("AdminPosts socket connected", socket.id)
+        );
+        socket.on("post:created", (payload) => {
+          console.debug("AdminPosts received post:created", payload);
+          load();
+        });
+        socket.on("post:updated", (payload) => {
+          console.debug("AdminPosts received post:updated", payload);
+          load();
+        });
+        socket.on("post:deleted", (payload) => {
+          console.debug("AdminPosts received post:deleted", payload);
+          load();
+        });
+        // cleanup
+        return () => {
+          try {
+            socket.disconnect();
+          } catch (e) {}
+        };
+      }
+    } catch (e) {
+      console.warn("AdminPosts: realtime init failed", e);
+    }
+  }, []);
+
+  const onSearch = async (e) => {
+    e && e.preventDefault && e.preventDefault();
+    await load();
+  };
+
+  // Note: admin-level deletion has been disabled. Authors can still delete their own posts
+  // via the existing author-only endpoint (server route /delete/:postId). We intentionally
+  // do not expose any admin delete UI or call the admin delete API.
+
+  const onHide = async (id) => {
+    if (!confirm("Ẩn/hiện toggling bài viết?")) return;
+    try {
+      await hideAdminPost(id);
+      // reload
+      await load();
+    } catch (e) {
+      alert("Thao tác thất bại");
+    }
+  };
+
+  return (
+    <div className="p-6">
+      <h2 className="text-2xl font-semibold mb-4">Quản lý bài viết</h2>
+
+      <form onSubmit={onSearch} className="mb-4 flex gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Tìm theo tiêu đề hoặc nội dung"
+          className="flex-1 px-4 py-2 border rounded-lg"
+        />
+        <button className="px-4 py-2 bg-blue-600 text-white rounded-lg">
+          Tìm
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setQ("");
+            load();
+          }}
+          className="px-4 py-2 bg-gray-200 rounded-lg"
+        >
+          Clear
+        </button>
+      </form>
+
+      {loading && <div>Đang tải...</div>}
+      {error && <div className="text-red-600">{error}</div>}
+
+      <div className="overflow-x-auto bg-white rounded shadow">
+        <table className="min-w-full text-left table-fixed">
+          <thead>
+            <tr className="border-b">
+              <th className="px-4 py-3 w-1/6">ID</th>
+              <th className="px-4 py-3 w-36">Ảnh</th>
+              <th className="px-4 py-3 w-2/5">Nội dung</th>
+              <th className="px-4 py-3 w-1/5">Tác giả</th>
+              <th className="px-4 py-3">Trạng thái</th>
+              <th className="px-4 py-3">Hành động</th>
+            </tr>
+          </thead>
+          <tbody>
+            {posts.map((p) => (
+              <tr
+                key={p.id}
+                className={`border-b hover:bg-gray-50 ${
+                  p.hidden ? "opacity-70 bg-gray-50" : ""
+                }`}
+              >
+                <td className="px-4 py-3 align-middle">
+                  <div className="max-w-[200px] overflow-hidden whitespace-nowrap truncate flex items-center">
+                    {p.id}
+                  </div>
+                </td>
+                <td className="px-4 py-3 align-middle">
+                  <div className="max-w-[80px]">
+                    {p.imageUrl ? (
+                      <img
+                        src={`http://localhost:5000${p.imageUrl}`}
+                        alt="img"
+                        className="w-16 h-10 object-cover rounded cursor-pointer hover:opacity-90"
+                        onClick={() => openModal(p)}
+                        onError={(e) => {
+                          e.target.style.display = "none";
+                        }}
+                      />
+                    ) : (
+                      <div className="w-16 h-10 bg-gray-100 rounded flex items-center justify-center text-xs text-gray-500">
+                        No img
+                      </div>
+                    )}
+                  </div>
+                </td>
+                <td className="px-4 py-3 align-middle">
+                  <div className="max-w-[420px] overflow-hidden whitespace-nowrap truncate flex items-center">
+                    {p.title || p.content?.slice(0, 120)}
+                  </div>
+                </td>
+                <td className="px-4 py-3 align-middle">
+                  <div className="max-w-[160px] overflow-hidden whitespace-nowrap truncate flex items-center">
+                    {p.authorName || p.author?.displayName}
+                  </div>
+                </td>
+                <td
+                  className="px-4 py-3 align-middle"
+                  title={
+                    p.hidden
+                      ? "Bài viết đã bị ẩn — sẽ không xuất hiện với người dùng công khai."
+                      : "Bài viết đang được hiển thị"
+                  }
+                >
+                  {p.hidden ? (
+                    <span className="text-gray-600 italic">
+                      Ẩn — không hiển thị công khai
+                    </span>
+                  ) : (
+                    "Hiển thị"
+                  )}
+                </td>
+                <td className="px-4 py-3 align-middle">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onHide(p.id)}
+                      className="flex-1 min-w-[72px] px-3 py-1 bg-yellow-400 rounded text-sm"
+                    >
+                      {p.hidden ? "Bỏ ẩn" : "Ẩn"}
+                    </button>
+                    <button
+                      onClick={() => openModal(p)}
+                      className="px-3 py-1 bg-gray-800 text-white rounded text-sm"
+                    >
+                      Xem
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {/* Modal for post details */}
+      {selectedPost && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black bg-opacity-50"
+            onClick={closeModal}
+          />
+          <div className="relative bg-white rounded-lg shadow-lg max-w-5xl w-full mx-4 overflow-hidden">
+            <div className="p-6 flex gap-6">
+              <div className="w-1/2 flex-shrink-0">
+                {selectedPost.imageUrl ? (
+                  <img
+                    src={`http://localhost:5000${selectedPost.imageUrl}`}
+                    alt="post"
+                    className="w-full h-[420px] object-cover rounded"
+                  />
+                ) : (
+                  <div className="w-full h-[420px] bg-gray-100 rounded flex items-center justify-center text-gray-500">
+                    No image
+                  </div>
+                )}
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-semibold mb-2">
+                  Chi tiết bài viết
+                </h3>
+                <div className="grid grid-cols-2 gap-4 text-sm text-gray-700">
+                  <div>
+                    <div className="text-xs text-gray-400">Trạng thái</div>
+                    <div className="mt-1">
+                      {selectedPost.hidden ? "Ẩn" : "Hiển thị"}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-gray-400">Tác giả</div>
+                    <div className="mt-1">
+                      {selectedPost.authorName ||
+                        selectedPost.author?.displayName}
+                    </div>
+                  </div>
+                  <div className="col-span-2">
+                    <div className="text-xs text-gray-400">ID</div>
+                    <div className="mt-1 break-words text-xs text-gray-600">
+                      {selectedPost.id}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <div className="text-xs text-gray-400">Nội dung</div>
+                  <div className="mt-2 text-gray-800 whitespace-pre-wrap">
+                    {selectedPost.content || selectedPost.title}
+                  </div>
+                </div>
+
+                <div className="mt-6 flex justify-end">
+                  <button
+                    onClick={closeModal}
+                    className="px-6 py-2 bg-black text-white rounded-lg"
+                  >
+                    Đóng
+                  </button>
+                </div>
+              </div>
+            </div>
+            {/* bottom-right close button inside modal card */}
+            <div className="absolute bottom-4 right-4">
+              <button
+                onClick={closeModal}
+                className="px-4 py-2 bg-black text-white rounded-lg shadow"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -155,11 +155,20 @@ router.post("/mark-read", verifyToken, async (req, res) => {
   const session = driver.session();
   try {
     const userId = req.userId; // Fix: use req.userId not req.user.userId
-    const { notificationId } = req.body;
+    const { notificationId, notificationIds } = req.body;
 
     let query, params;
 
-    if (notificationId) {
+    if (Array.isArray(notificationIds) && notificationIds.length > 0) {
+      // Mark specific notifications by id (array)
+      query = `
+        MATCH (u:User {id: $userId})-[:HAS_NOTIFICATION]->(n:Notification)
+        WHERE n.id IN $ids
+        SET n.read = true
+        RETURN count(n) as updated
+      `;
+      params = { userId, ids: notificationIds };
+    } else if (notificationId) {
       // Mark specific notification as read
       query = `
         MATCH (u:User {id: $userId})-[:HAS_NOTIFICATION]->(n:Notification {id: $notificationId})
@@ -178,35 +187,58 @@ router.post("/mark-read", verifyToken, async (req, res) => {
     }
 
     const result = await session.run(query, params);
-    const updated = result.records[0]?.get("updated") || 0;
+    let updated = result.records[0]?.get("updated") || 0;
 
-    // Additionally: handle orphaned notifications that reference posts authored by user
-    // Some notifications may not have HAS_NOTIFICATION relationship but have postId
+    // If we didn't update any via HAS_NOTIFICATION, try to mark the specific
+    // notification(s) by id if they reference a post authored by this user.
     try {
-      const orphanQ = `
-        MATCH (u:User {id: $userId})-[:POSTED]->(p:Post)
-        MATCH (n:Notification {postId: p.id})
-        WHERE n.read IS NULL OR n.read = false
-        SET n.read = true
-        WITH count(n) as orphanUpdated, collect(n.id) as ids
-        RETURN orphanUpdated, ids
-      `;
-      const orphanRes = await session.run(orphanQ, { userId });
-      const orphanUpdated = orphanRes.records[0]?.get("orphanUpdated") || 0;
-      if (orphanUpdated > 0) {
-        console.log(
-          `Also marked ${orphanUpdated} orphaned notifications as read for user=${userId}`
-        );
+      const prevUpdated =
+        updated && (updated.toNumber ? updated.toNumber() : updated);
+      if (
+        (prevUpdated === 0 || !prevUpdated) &&
+        (notificationId ||
+          (Array.isArray(notificationIds) && notificationIds.length > 0))
+      ) {
+        // build list of ids to try matching by post author
+        const idsToTry = notificationId ? [notificationId] : notificationIds;
+        const orphanByIdsQ = `
+          MATCH (u:User {id: $userId})-[:POSTED]->(p:Post)
+          MATCH (n:Notification)
+          WHERE n.id IN $ids AND n.postId = p.id
+          SET n.read = true
+          RETURN count(n) AS updated
+        `;
+        const orphanRes = await session.run(orphanByIdsQ, {
+          userId,
+          ids: idsToTry,
+        });
+        const orphanUpdated = orphanRes.records[0]?.get("updated") || 0;
+        const orphanCount =
+          (orphanUpdated &&
+            (orphanUpdated.toNumber
+              ? orphanUpdated.toNumber()
+              : orphanUpdated)) ||
+          0;
+        updated = (prevUpdated || 0) + orphanCount;
+        if (orphanCount > 0) {
+          console.log(
+            `Also marked ${orphanCount} orphaned notifications as read for user=${userId} (by ids)`
+          );
+        }
       }
     } catch (e) {
-      console.warn("Failed to mark orphaned notifications as read", e);
+      console.warn("Failed to mark orphaned notification by id as read", e);
     }
 
-    console.log(`Marked ${updated} notifications as read for user=${userId}`);
+    const updatedCount =
+      (updated && (updated.toNumber ? updated.toNumber() : updated)) || 0;
+    console.log(
+      `Marked ${updatedCount} notifications as read for user=${userId}`
+    );
 
     res.json({
       success: true,
-      updated: updated.toNumber ? updated.toNumber() : updated,
+      updated: updatedCount,
     });
   } catch (error) {
     console.error("Error marking notifications as read:", error);

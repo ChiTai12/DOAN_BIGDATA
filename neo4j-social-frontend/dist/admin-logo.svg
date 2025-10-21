@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Transparent background; white-only concentric circles -->
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="64" cy="64" r="48" stroke-width="6" />
+    <circle cx="64" cy="64" r="34" stroke-width="6" />
+    <circle cx="64" cy="64" r="16" stroke-width="6" />
+  </g>
+</svg>
