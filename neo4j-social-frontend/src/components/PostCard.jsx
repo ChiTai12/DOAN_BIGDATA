@@ -1101,7 +1101,28 @@ function PostCard({ post, author, onDelete }) {
 
           <button
             className="text-gray-700 hover:opacity-70 transition-opacity"
-            title="Chia sẻ"
+            title="Báo cáo"
+            onClick={async () => {
+              try {
+                // prevent reporting your own post on client as extra guard
+                if (
+                  (user && user.id) === post.authorId ||
+                  (user && user.id) === post.author?.id
+                ) {
+                  alert("Bạn không thể báo cáo bài của chính mình");
+                  return;
+                }
+                const ok = confirm("Bạn có muốn báo cáo bài viết này không?");
+                if (!ok) return;
+                const reason = prompt("Lý do báo cáo (tùy chọn):", "");
+                const reports = await import("../services/reportsApi");
+                await reports.createReport({ postId: post.id, reason });
+                alert("Cảm ơn, bài viết đã được báo cáo.");
+              } catch (e) {
+                console.error("Report failed", e);
+                alert(e?.response?.data?.error || "Báo cáo thất bại");
+              }
+            }}
           >
             <svg
               width="24"
@@ -1111,9 +1132,7 @@ function PostCard({ post, author, onDelete }) {
               stroke="currentColor"
               strokeWidth="2"
             >
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15,3 21,3 21,9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
+              <path d="M4 21v-13l6 4 6-4 4 3v10H4z" />
             </svg>
           </button>
         </div>

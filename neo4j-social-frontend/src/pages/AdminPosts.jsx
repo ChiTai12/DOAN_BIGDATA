@@ -96,9 +96,10 @@ export default function AdminPosts() {
 
   return (
     <div className="p-6">
-      <h2 className="text-2xl font-semibold mb-4">Quản lý bài viết</h2>
+      <div className="sticky top-0 bg-white z-20 pb-4">
+        <h2 className="text-4xl font-extrabold uppercase tracking-tight mb-4">QUẢN LÝ BÀI VIẾT</h2>
 
-      <form onSubmit={onSearch} className="mb-4 flex gap-2">
+        <form onSubmit={onSearch} className="mb-4 flex gap-2">
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -119,20 +120,21 @@ export default function AdminPosts() {
           Clear
         </button>
       </form>
+      </div>
 
       {loading && <div>Đang tải...</div>}
       {error && <div className="text-red-600">{error}</div>}
 
-      <div className="overflow-x-auto bg-white rounded shadow">
-        <table className="min-w-full text-left table-fixed">
+      <div className="bg-white rounded shadow p-4 overflow-hidden border border-slate-300">
+        <table className="w-full table-fixed text-left">
           <thead>
-            <tr className="border-b">
-              <th className="px-4 py-3 w-1/6">ID</th>
-              <th className="px-4 py-3 w-36">Ảnh</th>
-              <th className="px-4 py-3 w-2/5">Nội dung</th>
-              <th className="px-4 py-3 w-1/5">Tác giả</th>
-              <th className="px-4 py-3">Trạng thái</th>
-              <th className="px-4 py-3">Hành động</th>
+            <tr>
+              <th className="px-4 py-3 w-1/6 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">ID</th>
+              <th className="px-4 py-3 w-36 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">Ảnh</th>
+              <th className="px-4 py-3 w-1/4 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">Nội dung</th>
+              <th className="px-4 py-3 w-1/6 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">Tác giả</th>
+              <th className="px-4 py-3 text-lg font-extrabold uppercase tracking-wide w-36 pr-6 whitespace-nowrap border-b border-slate-200">Trạng thái</th>
+              <th className="px-4 py-3 text-lg font-extrabold uppercase tracking-wide w-40 pl-4 whitespace-nowrap border-b border-slate-200">Hành động</th>
             </tr>
           </thead>
           <tbody>
@@ -168,17 +170,17 @@ export default function AdminPosts() {
                   </div>
                 </td>
                 <td className="px-4 py-3 align-middle">
-                  <div className="max-w-[420px] overflow-hidden whitespace-nowrap truncate flex items-center">
+                  <div className="max-w-[260px] overflow-hidden whitespace-nowrap truncate flex items-center">
                     {p.title || p.content?.slice(0, 120)}
                   </div>
                 </td>
                 <td className="px-4 py-3 align-middle">
-                  <div className="max-w-[160px] overflow-hidden whitespace-nowrap truncate flex items-center">
+                  <div className="max-w-[140px] overflow-hidden whitespace-nowrap truncate flex items-center">
                     {p.authorName || p.author?.displayName}
                   </div>
                 </td>
                 <td
-                  className="px-4 py-3 align-middle"
+                  className="px-4 py-3 align-middle w-36 pr-6 whitespace-nowrap"
                   title={
                     p.hidden
                       ? "Bài viết đã bị ẩn — sẽ không xuất hiện với người dùng công khai."
@@ -193,8 +195,8 @@ export default function AdminPosts() {
                     "Hiển thị"
                   )}
                 </td>
-                <td className="px-4 py-3 align-middle">
-                  <div className="flex gap-2">
+                <td className="px-4 py-3 align-middle w-40 pl-4">
+                  <div className="flex gap-2 justify-end">
                     <button
                       onClick={() => onHide(p.id)}
                       className="flex-1 min-w-[72px] px-3 py-1 bg-yellow-400 rounded text-sm"
@@ -269,14 +271,7 @@ export default function AdminPosts() {
                   </div>
                 </div>
 
-                <div className="mt-6 flex justify-end">
-                  <button
-                    onClick={closeModal}
-                    className="px-6 py-2 bg-black text-white rounded-lg"
-                  >
-                    Đóng
-                  </button>
-                </div>
+                {/* inner close removed — use bottom-right button */}
               </div>
             </div>
             {/* bottom-right close button inside modal card */}

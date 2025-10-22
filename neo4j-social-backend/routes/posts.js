@@ -233,6 +233,7 @@ router.delete("/delete/:postId", verifyToken, async (req, res) => {
     // XÓA TOÀN BỘ: comments, notifications, likes và mọi relationships liên quan đến post này
     let deletedNotifIds = [];
     let deletedCommentIds = [];
+    let deletedReportIds = [];
 
     try {
       console.log(
@@ -331,7 +332,35 @@ router.delete("/delete/:postId", verifyToken, async (req, res) => {
         }
       }
 
-      // 5. Cuối cùng xóa Post node và mọi relationships còn lại
+      // 5. Xóa các Report nodes trực tiếp liên quan đến post này nếu có
+      try {
+        const reportFindQ = `
+          MATCH (rep:Report)-[:ON_POST]->(p:Post {id:$postId})
+          RETURN rep.id AS id
+        `;
+        const reportRes = await session.run(reportFindQ, {
+          postId: req.params.postId,
+        });
+        deletedReportIds = reportRes.records.map((r) => r.get("id")) || [];
+
+        if (deletedReportIds.length > 0) {
+          console.log(
+            `🗑️ Deleting ${deletedReportIds.length} Report nodes for post ${req.params.postId}`
+          );
+          await session.run(
+            `MATCH (r:Report) WHERE r.id IN $ids DETACH DELETE r`,
+            { ids: deletedReportIds }
+          );
+        }
+      } catch (repErr) {
+        console.warn(
+          "Failed to clean up Report nodes for post",
+          req.params.postId,
+          repErr
+        );
+      }
+
+      // 6. Cuối cùng xóa Post node và mọi relationships còn lại
       await session.run(
         `
         MATCH (p:Post {id: $postId})
@@ -362,6 +391,7 @@ router.delete("/delete/:postId", verifyToken, async (req, res) => {
           deletedByUsername: authorInfo ? authorInfo.get("username") : null,
           deletedAt: Date.now(),
           notifIds: deletedNotifIds,
+          reportIds: deletedReportIds,
         };
         ioAll.emit("post:deleted", deletedPayload);
         ioAll.emit("stats:update"); // Thông báo dashboard cập nhật realtime
@@ -399,6 +429,7 @@ router.delete("/delete/:postId", verifyToken, async (req, res) => {
       deleted: {
         comments: deletedCommentIds.length,
         notifications: deletedNotifIds.length,
+        reports: deletedReportIds.length,
         post: 1,
       },
     });

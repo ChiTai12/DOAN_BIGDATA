@@ -65,6 +65,8 @@ app.get("/test-db", async (req, res) => {
 
 import statsRoutes from "./routes/stats.js";
 app.use("/stats", statsRoutes);
+import reportsRoutes from "./routes/reports.js";
+app.use("/reports", reportsRoutes);
 
 const PORT = process.env.PORT || 5000;
 

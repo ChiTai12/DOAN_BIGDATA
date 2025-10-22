@@ -26,6 +26,7 @@ import ioClient from "socket.io-client";
 import { SOCKET_URL } from "../config.js";
 import AdminDashboardMenu from "./AdminDashboardMenu";
 import AdminPosts from "./AdminPosts";
+import AdminReports from "./AdminReports";
 
 const StatCard = ({ colorClass, title, value, icon }) => (
   <div className={`p-6 rounded-lg ${colorClass} text-white shadow-sm w-full`}>
@@ -303,7 +304,15 @@ export default function AdminDashboard() {
                     <span className="text-sm">Quản Lý Bài Viết</span>
                   </li>
 
-                  <li className="flex items-center gap-4 px-4 py-3 rounded-lg hover:bg-blue-700/60">
+                  <li
+                    onClick={() => (window.location.pathname = "/admin/users")}
+                    className={
+                      "flex items-center gap-4 px-4 py-3 rounded-lg cursor-pointer " +
+                      (currentPath === "/admin/users"
+                        ? "bg-blue-600"
+                        : "hover:bg-blue-700/60")
+                    }
+                  >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
                       className="h-6 w-6 opacity-90"
@@ -327,7 +336,17 @@ export default function AdminDashboard() {
                     <span className="text-sm">Quản Lý Người Dùng</span>
                   </li>
 
-                  <li className="flex items-center gap-4 px-4 py-3 rounded-lg hover:bg-blue-700/60">
+                  <li
+                    onClick={() =>
+                      (window.location.pathname = "/admin/reports")
+                    }
+                    className={
+                      "flex items-center gap-4 px-4 py-3 rounded-lg cursor-pointer " +
+                      (currentPath === "/admin/reports"
+                        ? "bg-blue-600"
+                        : "hover:bg-blue-700/60")
+                    }
+                  >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
                       className="h-6 w-6 opacity-90"
@@ -342,7 +361,7 @@ export default function AdminDashboard() {
                         d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
                       />
                     </svg>
-                    <span className="text-sm">Quản Lý Tin Nhắn</span>
+                    <span className="text-sm">Báo cáo phản hồi</span>
                   </li>
 
                   <li className="flex items-center gap-4 px-4 py-3 rounded-lg hover:bg-blue-700/60">
@@ -376,6 +395,9 @@ export default function AdminDashboard() {
             {typeof window !== "undefined" &&
             window.location.pathname === "/admin/posts" ? (
               <AdminPosts />
+            ) : typeof window !== "undefined" &&
+              window.location.pathname === "/admin/reports" ? (
+              <AdminReports />
             ) : (
               <>
                 <div className="flex items-center justify-between mb-6">

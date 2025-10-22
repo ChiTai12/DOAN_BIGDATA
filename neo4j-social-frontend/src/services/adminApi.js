@@ -52,4 +52,10 @@ export const deleteAdminPost = (postId) => {
 export const hideAdminPost = (postId) =>
   adminApi.post(`/admin/posts/${postId}/hide`);
 
+// Admin reports
+export const fetchAdminReports = (params) =>
+  adminApi.get(`/reports`, { params });
+export const updateReportStatus = (reportId, status) =>
+  adminApi.patch(`/reports/${reportId}`, { status });
+
 export default adminApi;
