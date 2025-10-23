@@ -25,6 +25,7 @@ import { useAuth } from "../components/AuthContext";
 import ioClient from "socket.io-client";
 import { SOCKET_URL } from "../config.js";
 import AdminDashboardMenu from "./AdminDashboardMenu";
+import { FaUsers } from "react-icons/fa";
 import AdminPosts from "./AdminPosts";
 import AdminReports from "./AdminReports";
 import AdminUsers from "./AdminUsers";
@@ -314,26 +315,7 @@ export default function AdminDashboard() {
                         : "hover:bg-blue-700/60")
                     }
                   >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-6 w-6 opacity-90"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M5.121 17.804A9 9 0 1118.879 6.196 9 9 0 015.12 17.804z"
-                      />
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                      />
-                    </svg>
+                    <FaUsers className="h-6 w-6 opacity-90" />
                     <span className="text-sm">Quản Lý Người Dùng</span>
                   </li>
 

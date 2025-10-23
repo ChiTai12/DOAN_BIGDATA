@@ -191,14 +191,14 @@ export default function AdminReports() {
                 <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Người báo cáo
                 </th>
-                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
+                <th className="w-2/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Lý do báo cáo
                 </th>
-                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
-                  Bài viết bị báo cáo
+                <th className="w-0 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
+                  <span className="sr-only">Bài viết bị báo cáo</span>
                 </th>
                 <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
-                  Tác giả bài viết
+                  Mã bài viết
                 </th>
                 <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Trạng thái xử lý
@@ -228,22 +228,15 @@ export default function AdminReports() {
                     </div>
                   </td>
                   <td className="px-6 py-5 text-lg">
-                    {r.post?.content ? (
-                      <div
-                        className="text-base text-slate-700 truncate"
-                        title={r.post.content}
-                      >
-                        {r.post.content}
-                      </div>
-                    ) : (
-                      <span className="text-slate-500">(no content)</span>
-                    )}
+                    {/* intentionally leave blank to give more space to 'Lý do báo cáo' */}
                   </td>
                   <td className="px-6 py-5 text-lg">
-                    {r.author?.displayName ||
-                      r.author?.username ||
-                      r.author?.id ||
-                      "(unknown)"}
+                    <div
+                      title={r.post?.id || r.postId || "(unknown)"}
+                      className="max-w-[200px] overflow-hidden whitespace-nowrap truncate font-mono text-base text-slate-700"
+                    >
+                      {r.post?.id || r.postId || "(unknown)"}
+                    </div>
                   </td>
                   <td className="px-6 py-4 text-base relative">
                     <div className="flex items-center gap-2">

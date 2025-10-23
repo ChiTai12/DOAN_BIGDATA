@@ -4,6 +4,7 @@ import { useAuth } from "./AuthContext";
 import api from "../services/api";
 import feelings from "../data/feelings";
 import EditPostModal from "./EditPostModal";
+import { FiFlag } from "react-icons/fi";
 
 // Helper to render icon metadata which may be stored as an array, a
 // comma-separated string, or a single emoji string. Preserves order
@@ -1114,7 +1115,7 @@ function PostCard({ post, author, onDelete }) {
           </button>
 
           <button
-            className="text-gray-700 hover:opacity-70 transition-opacity"
+            className="text-gray-700 hover:opacity-70 transition-opacity flex items-center"
             title="Báo cáo"
             onClick={async () => {
               try {
@@ -1163,16 +1164,7 @@ function PostCard({ post, author, onDelete }) {
               }
             }}
           >
-            <svg
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M4 21v-13l6 4 6-4 4 3v10H4z" />
-            </svg>
+            <FiFlag className="w-6 h-6" />
           </button>
         </div>
 
