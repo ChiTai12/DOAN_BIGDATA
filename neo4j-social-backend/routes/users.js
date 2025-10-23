@@ -3,12 +3,14 @@ import multer from "multer";
 import path from "path";
 import driver from "../db/driver.js";
 import requireUser from "../middleware/requireUser.js";
+import { verifyToken } from "../middleware/auth.js";
 import requireAdmin from "../middleware/requireAdmin.js";
 
 const router = express.Router();
 
-// Get all users (for messenger dropdown)
-router.get("/", requireUser, async (req, res) => {
+// Get all users (for messenger dropdown / admin list)
+// Use verifyToken so both regular users and admins (for admin UI) can access this endpoint.
+router.get("/", verifyToken, async (req, res) => {
   const session = driver.session();
   try {
     const result = await session.run(
@@ -647,3 +649,42 @@ router.delete("/remove-follower/:userId", requireUser, async (req, res) => {
 });
 
 export default router;
+
+// Admin endpoint: update a user's status (active|locked)
+// Example: PATCH /users/status/7b955a62-6f1c-4623-a3cf-a4b5be44045a { status: 'locked' }
+router.patch("/status/:userId", requireAdmin, async (req, res) => {
+  const { status } = req.body;
+  const allowed = ["active", "locked"];
+  if (!status || !allowed.includes(status)) {
+    return res.status(400).json({ error: "Invalid status" });
+  }
+
+  const session = driver.session();
+  try {
+    const result = await session.run(
+      `MATCH (u:User {id:$id}) SET u.status=$status RETURN u`,
+      { id: req.params.userId, status }
+    );
+    if (result.records.length === 0)
+      return res.status(404).json({ error: "User not found" });
+
+    const user = result.records[0].get("u").properties;
+    delete user.passwordHash;
+    delete user.password;
+
+    // emit event
+    try {
+      const io = req.app && req.app.locals && req.app.locals.io;
+      if (io) io.emit("user:status:updated", { userId: user.id, status });
+    } catch (e) {
+      console.warn("Failed to emit user:status:updated", e);
+    }
+
+    res.json({ user });
+  } catch (error) {
+    console.error("Failed to update user status", error);
+    res.status(500).json({ error: "Failed to update status" });
+  } finally {
+    await session.close();
+  }
+});

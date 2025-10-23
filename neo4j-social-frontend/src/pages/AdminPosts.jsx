@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { fetchAdminPosts, hideAdminPost } from "../services/adminApi";
 import ioClient from "socket.io-client";
 import { SOCKET_URL } from "../config.js";
@@ -6,18 +6,29 @@ import { SOCKET_URL } from "../config.js";
 export default function AdminPosts() {
   const [q, setQ] = useState("");
   const [posts, setPosts] = useState([]);
+  const [allPosts, setAllPosts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selectedPost, setSelectedPost] = useState(null);
+  const selectedPostRef = useRef(null);
+
+  // keep ref in sync with state so socket handlers can read latest value
+  useEffect(() => {
+    selectedPostRef.current = selectedPost;
+  }, [selectedPost]);
 
   const openModal = (post) => setSelectedPost(post);
   const closeModal = () => setSelectedPost(null);
 
-  const load = async () => {
+  const load = async (query) => {
+    const qVal = query !== undefined ? query : q;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetchAdminPosts({ q });
+      // Always fetch the full list from the admin endpoint and apply filtering client-side.
+      // Some backends may implement server-side search differently; client-side filter
+      // keeps behavior predictable for the admin UI.
+      const res = await fetchAdminPosts();
       // normalize various response shapes:
       // - axios response where res.data is an object { data: [...] }
       // - axios response where res.data is an array
@@ -28,7 +39,36 @@ export default function AdminPosts() {
       else if (Array.isArray(payload.data)) items = payload.data;
       else if (Array.isArray(payload.posts)) items = payload.posts;
       else items = [];
-      setPosts(items);
+      setAllPosts(items);
+      if (qVal && String(qVal).trim() !== "") {
+        const term = String(qVal).toLowerCase().trim();
+        const filtered = items.filter((p) => {
+          const author =
+            (p.authorName ||
+              p.author?.displayName ||
+              p.author?.username ||
+              "") + "";
+          const id = String(p.id || "");
+          return (
+            author.toLowerCase().includes(term) ||
+            id.toLowerCase().includes(term)
+          );
+        });
+        setPosts(filtered);
+      } else {
+        setPosts(items);
+      }
+      // Keep modal details in sync: if a post is currently open, update it from the
+      // freshly fetched items. If the post no longer exists (deleted), close modal.
+      try {
+        if (selectedPost) {
+          const updated = items.find(
+            (it) => String(it.id) === String(selectedPost.id)
+          );
+          if (updated) setSelectedPost(updated);
+          else setSelectedPost(null);
+        }
+      } catch (e) {}
     } catch (e) {
       const msg =
         e && e.response && e.response.data && e.response.data.error
@@ -50,16 +90,73 @@ export default function AdminPosts() {
         socket.on("connect", () =>
           console.log("AdminPosts socket connected", socket.id)
         );
+        // helper to extract post object or id from different payload shapes
+        const extractPost = (payload) => {
+          if (!payload) return null;
+          // payload may be { post }, { postId }, or full post object
+          let post = null;
+          if (payload.post) post = payload.post;
+          else if (payload.post && payload.post.post) post = payload.post.post;
+          else post = payload;
+          // fallback id from postId or post.postId
+          if ((!post || !post.id) && payload.postId) {
+            post = { ...(post || {}), id: payload.postId };
+          }
+          if ((!post || !post.id) && payload.id) {
+            post = { ...(post || {}), id: payload.id };
+          }
+          // attach author meta if provided
+          if (payload.author && post) {
+            post.author = payload.author;
+            post.authorName =
+              payload.author.displayName ||
+              payload.author.fullName ||
+              payload.author.username ||
+              post.authorName;
+          }
+          return post;
+        };
+
         socket.on("post:created", (payload) => {
           console.debug("AdminPosts received post:created", payload);
+          try {
+            const cur = selectedPostRef.current;
+            const post = extractPost(payload);
+            if (cur && post && String(post.id) === String(cur.id)) {
+              setSelectedPost(post);
+            }
+          } catch (e) {}
           load();
         });
+
         socket.on("post:updated", (payload) => {
           console.debug("AdminPosts received post:updated", payload);
+          try {
+            const cur = selectedPostRef.current;
+            const post = extractPost(payload);
+            if (cur && post && String(post.id) === String(cur.id)) {
+              setSelectedPost((prev) => ({ ...(prev || {}), ...post }));
+            }
+          } catch (e) {}
           load();
         });
+
         socket.on("post:deleted", (payload) => {
           console.debug("AdminPosts received post:deleted", payload);
+          try {
+            const cur = selectedPostRef.current;
+            const post = extractPost(payload);
+            const deletedId =
+              post && post.id
+                ? post.id
+                : payload &&
+                  (payload.postId ||
+                    payload.id ||
+                    (payload.post && payload.post.id));
+            if (cur && deletedId && String(deletedId) === String(cur.id)) {
+              setSelectedPost(null);
+            }
+          } catch (e) {}
           load();
         });
         // cleanup
@@ -76,7 +173,7 @@ export default function AdminPosts() {
 
   const onSearch = async (e) => {
     e && e.preventDefault && e.preventDefault();
-    await load();
+    await load(q);
   };
 
   // Note: admin-level deletion has been disabled. Authors can still delete their own posts
@@ -97,29 +194,48 @@ export default function AdminPosts() {
   return (
     <div className="p-6">
       <div className="sticky top-0 bg-white z-20 pb-4">
-        <h2 className="text-4xl font-extrabold uppercase tracking-tight mb-4">QUẢN LÝ BÀI VIẾT</h2>
+        <h2 className="text-4xl font-extrabold uppercase tracking-tight mb-4">
+          QUẢN LÝ BÀI VIẾT
+        </h2>
 
         <form onSubmit={onSearch} className="mb-4 flex gap-2">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Tìm theo tiêu đề hoặc nội dung"
-          className="flex-1 px-4 py-2 border rounded-lg"
-        />
-        <button className="px-4 py-2 bg-blue-600 text-white rounded-lg">
-          Tìm
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setQ("");
-            load();
-          }}
-          className="px-4 py-2 bg-gray-200 rounded-lg"
-        >
-          Clear
-        </button>
-      </form>
+          <div className="relative flex-1">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+              aria-hidden="true"
+            >
+              <path
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M21 21l-4.35-4.35M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"
+              />
+            </svg>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Tìm theo ID hoặc tên tác giả"
+              className="w-full pl-11 pr-3 h-11 border border-gray-200 rounded-md text-lg focus:outline-none focus:ring-2 focus:ring-blue-200"
+            />
+          </div>
+          <button className="px-4 py-2 bg-blue-600 text-white rounded-lg text-lg">
+            Tìm
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              setQ("");
+              await load("");
+            }}
+            className="px-4 py-2 bg-gray-200 rounded-lg text-lg"
+          >
+            Xóa
+          </button>
+        </form>
       </div>
 
       {loading && <div>Đang tải...</div>}
@@ -129,12 +245,24 @@ export default function AdminPosts() {
         <table className="w-full table-fixed text-left">
           <thead>
             <tr>
-              <th className="px-4 py-3 w-1/6 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">ID</th>
-              <th className="px-4 py-3 w-36 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">Ảnh</th>
-              <th className="px-4 py-3 w-1/4 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">Nội dung</th>
-              <th className="px-4 py-3 w-1/6 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">Tác giả</th>
-              <th className="px-4 py-3 text-lg font-extrabold uppercase tracking-wide w-36 pr-6 whitespace-nowrap border-b border-slate-200">Trạng thái</th>
-              <th className="px-4 py-3 text-lg font-extrabold uppercase tracking-wide w-40 pl-4 whitespace-nowrap border-b border-slate-200">Hành động</th>
+              <th className="px-4 py-3 w-1/6 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">
+                ID
+              </th>
+              <th className="px-4 py-3 w-36 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">
+                Ảnh
+              </th>
+              <th className="px-4 py-3 w-1/4 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">
+                Nội dung
+              </th>
+              <th className="px-4 py-3 w-1/6 text-lg font-extrabold uppercase tracking-wide border-b border-slate-200">
+                Tác giả
+              </th>
+              <th className="px-4 py-3 text-lg font-extrabold uppercase tracking-wide w-36 pr-6 whitespace-nowrap border-b border-slate-200">
+                Trạng thái
+              </th>
+              <th className="px-4 py-3 text-lg font-extrabold uppercase tracking-wide w-40 pl-4 whitespace-nowrap border-b border-slate-200">
+                Hành động
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -181,18 +309,19 @@ export default function AdminPosts() {
                 </td>
                 <td
                   className="px-4 py-3 align-middle w-36 pr-6 whitespace-nowrap"
-                  title={
-                    p.hidden
-                      ? "Bài viết đã bị ẩn — sẽ không xuất hiện với người dùng công khai."
-                      : "Bài viết đang được hiển thị"
-                  }
+                  title={p.hidden ? "Không hiển thị" : "Hiển thị"}
                 >
                   {p.hidden ? (
-                    <span className="text-gray-600 italic">
-                      Ẩn — không hiển thị công khai
+                    <span
+                      className="inline-block bg-gray-100 text-gray-700 px-2 py-1 rounded text-sm"
+                      aria-label="Không hiển thị"
+                    >
+                      Không hiển thị
                     </span>
                   ) : (
-                    "Hiển thị"
+                    <span className="inline-block bg-green-100 text-green-800 px-2 py-1 rounded text-sm">
+                      Hiển thị
+                    </span>
                   )}
                 </td>
                 <td className="px-4 py-3 align-middle w-40 pl-4">

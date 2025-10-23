@@ -10,21 +10,28 @@ export default function AdminReports() {
   const [error, setError] = useState(null);
   const [openFor, setOpenFor] = useState(null);
   const [dropdownPos, setDropdownPos] = useState(null);
+  const [q, setQ] = useState("");
+
+  const load = async (query) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = {};
+      const qVal = typeof query !== "undefined" ? query : q;
+      if (qVal && String(qVal).trim().length > 0)
+        params.q = String(qVal).trim();
+      const res = await fetchAdminReports(params);
+      setReports(res.data || []);
+    } catch (err) {
+      console.error("fetchAdminReports error", err);
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let mounted = true;
-    setLoading(true);
-    fetchAdminReports()
-      .then((res) => {
-        if (!mounted) return;
-        setReports(res.data || []);
-      })
-      .catch((err) => {
-        console.error("fetchAdminReports error", err);
-        if (mounted) setError(err);
-      })
-      .finally(() => mounted && setLoading(false));
-    return () => (mounted = false);
+    load();
   }, []);
 
   // Realtime: listen for new reports, report updates, and post deletions so admin list stays in sync
@@ -92,7 +99,9 @@ export default function AdminReports() {
 
   return (
     <div className="p-6">
-  <h2 className="text-4xl font-extrabold uppercase tracking-tight mb-6">Báo cáo phản hồi</h2>
+      <h2 className="text-4xl font-extrabold uppercase tracking-tight mb-6">
+        Báo cáo phản hồi
+      </h2>
       {renderError()}
       {loading && <div>Đang tải...</div>}
 
@@ -101,26 +110,72 @@ export default function AdminReports() {
       )}
 
       {!loading && reports.length > 0 && (
-        <div className="bg-white rounded shadow p-4 overflow-hidden border border-slate-300">
+        <div className="bg-white rounded shadow p-6 overflow-hidden border border-slate-300">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="relative">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                aria-hidden="true"
+              >
+                <path
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M21 21l-4.35-4.35M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"
+                />
+              </svg>
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    load(q);
+                  }
+                }}
+                placeholder="Tìm theo mã, người báo cáo"
+                className="pl-11 pr-3 h-10 w-96 border border-gray-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
+              />
+            </div>
+            <button
+              onClick={() => load(q)}
+              className="px-4 h-10 flex items-center justify-center text-sm border border-transparent bg-blue-600 text-white rounded-md hover:bg-blue-700"
+            >
+              Tìm
+            </button>
+            <button
+              onClick={async () => {
+                setQ("");
+                await load("");
+              }}
+              className="px-4 h-10 flex items-center justify-center text-sm border bg-white rounded-md hover:bg-gray-50"
+            >
+              Xóa
+            </button>
+          </div>
           <table className="w-full table-fixed divide-y divide-slate-200 text-base">
             <thead className="bg-slate-50">
               <tr>
-                <th className="px-6 py-4 text-left text-xl font-extrabold uppercase tracking-wide break-words border-b border-slate-200">
+                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Mã báo cáo
                 </th>
-                <th className="px-6 py-4 text-left text-xl font-extrabold uppercase tracking-wide break-words border-b border-slate-200">
+                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Người báo cáo
                 </th>
-                <th className="px-6 py-4 text-left text-xl font-extrabold uppercase tracking-wide break-words border-b border-slate-200">
+                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Lý do báo cáo
                 </th>
-                <th className="px-6 py-4 text-left text-xl font-extrabold uppercase tracking-wide break-words border-b border-slate-200">
+                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Bài viết bị báo cáo
                 </th>
-                <th className="px-6 py-4 text-left text-xl font-extrabold uppercase tracking-wide break-words border-b border-slate-200">
+                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Tác giả bài viết
                 </th>
-                <th className="px-6 py-4 text-left text-xl font-extrabold uppercase tracking-wide break-words border-b border-slate-200">
+                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Trạng thái xử lý
                 </th>
               </tr>
@@ -128,22 +183,31 @@ export default function AdminReports() {
             <tbody className="divide-y divide-slate-100">
               {reports.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50">
-                  <td className="px-6 py-4 text-base text-slate-700">{r.id}</td>
-                  <td className="px-6 py-4 text-base">
+                  <td className="px-6 py-5 text-lg text-slate-700">
+                    <span
+                      title={r.id}
+                      className="font-mono text-base text-slate-700"
+                    >
+                      {typeof r.id === "string" && r.id.length > 14
+                        ? `${r.id.slice(0, 8)}...${r.id.slice(-4)}`
+                        : r.id}
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-lg">
                     {r.reporter?.username || r.reporter?.id}
                   </td>
-                  <td className="px-6 py-4 text-base">
+                  <td className="px-6 py-5 text-lg">
                     <div
-                      className="text-sm text-slate-700 truncate max-w-xs"
+                      className="text-base text-slate-700 truncate"
                       title={r.reason || "(không có)"}
                     >
                       {r.reason || "(không có)"}
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-base max-w-xl">
+                  <td className="px-6 py-5 text-lg">
                     {r.post?.content ? (
                       <div
-                        className="text-sm text-slate-700 truncate max-w-xl"
+                        className="text-base text-slate-700 truncate"
                         title={r.post.content}
                       >
                         {r.post.content}
@@ -152,13 +216,16 @@ export default function AdminReports() {
                       <span className="text-slate-500">(no content)</span>
                     )}
                   </td>
-                  <td className="px-6 py-4 text-base">
-                    {r.author?.username || r.author?.id || "(unknown)"}
+                  <td className="px-6 py-5 text-lg">
+                    {r.author?.displayName ||
+                      r.author?.username ||
+                      r.author?.id ||
+                      "(unknown)"}
                   </td>
                   <td className="px-6 py-4 text-base relative">
                     <div className="flex items-center gap-2">
                       <button
-                        className={`inline-flex items-center gap-2 px-3 py-2 rounded text-sm ${
+                        className={`inline-flex items-center gap-2 px-4 py-2 rounded text-base ${
                           r.status === "pending"
                             ? "bg-yellow-100 text-yellow-800"
                             : r.status === "reviewed"
@@ -183,7 +250,7 @@ export default function AdminReports() {
                         </span>
                         <svg
                           xmlns="http://www.w3.org/2000/svg"
-                          className="h-4 w-4 opacity-80"
+                          className="h-5 w-5 opacity-80"
                           viewBox="0 0 20 20"
                           fill="currentColor"
                         >

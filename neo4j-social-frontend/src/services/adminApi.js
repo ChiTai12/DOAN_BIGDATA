@@ -52,6 +52,10 @@ export const deleteAdminPost = (postId) => {
 export const hideAdminPost = (postId) =>
   adminApi.post(`/admin/posts/${postId}/hide`);
 
+// Admin: change a user's status (active | locked)
+export const updateUserStatus = (userId, status) =>
+  adminApi.patch(`/users/status/${userId}`, { status });
+
 // Admin reports
 export const fetchAdminReports = (params) =>
   adminApi.get(`/reports`, { params });

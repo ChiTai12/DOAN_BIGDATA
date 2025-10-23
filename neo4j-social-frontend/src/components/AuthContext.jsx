@@ -105,7 +105,29 @@ export function AuthProvider({ children }) {
         console.warn("AuthContext: storage event handler error", err);
       }
     }
+    // Also listen for forced logout broadcast from other tabs/windows
+    function onStorageBroadcast(e) {
+      try {
+        if (e.key === "auth_force_logout") {
+          console.log(
+            "AuthContext: received auth_force_logout broadcast, clearing local auth state"
+          );
+          setUser(null);
+          setToken(null);
+          try {
+            localStorage.removeItem("token");
+            localStorage.removeItem("user");
+          } catch (ee) {}
+          try {
+            window.location.pathname = "/login";
+          } catch (ee) {}
+        }
+      } catch (err) {
+        console.warn("AuthContext: storage broadcast handler error", err);
+      }
+    }
     window.addEventListener("storage", onStorage);
+    window.addEventListener("storage", onStorageBroadcast);
     return () => window.removeEventListener("storage", onStorage);
   }, [token]);
 
@@ -148,6 +170,70 @@ export function AuthProvider({ children }) {
           }
         } catch (e) {
           console.warn("AuthContext: failed to apply user:updated payload", e);
+        }
+      });
+      // If server signals a status change for a user, and it affects the current
+      // session's user, force a logout when the status becomes non-active
+      socket.on("user:status:updated", (payload) => {
+        try {
+          const userId =
+            payload && (payload.userId || payload.user?.id || payload.id);
+          const status =
+            payload &&
+            (payload.status || (payload.user && payload.user.status));
+          const currentId = user && (user.id || user.userId || user._id);
+          if (userId && currentId && String(userId) === String(currentId)) {
+            console.log(
+              "AuthContext: received user:status:updated for current user",
+              { userId, status }
+            );
+            if (String(status) !== "active") {
+              try {
+                // inform the user and clear session
+                alert(
+                  "Tài khoản của bạn đã bị khóa bởi quản trị viên. Bạn sẽ được đăng xuất."
+                );
+              } catch (e) {}
+              try {
+                // Clear local auth state via logout helper
+                logout();
+              } catch (e) {
+                try {
+                  localStorage.removeItem("token");
+                  localStorage.removeItem("user");
+                } catch (er) {}
+              }
+              // Broadcast to other tabs to ensure they also clear auth
+              try {
+                localStorage.setItem(
+                  "auth_force_logout",
+                  Date.now().toString()
+                );
+              } catch (e) {}
+              try {
+                if (socketRef.current) socketRef.current.disconnect();
+              } catch (e) {}
+              try {
+                window.location.pathname = "/login";
+              } catch (e) {}
+            } else {
+              // status became active again - refresh current user from server
+              (async () => {
+                try {
+                  const res = await api.get("/users/me");
+                  const refreshed = res.data?.user ?? res.data;
+                  if (refreshed) updateUserAndPersist(refreshed);
+                } catch (e) {
+                  console.warn(
+                    "AuthContext: failed to refresh user after status active",
+                    e
+                  );
+                }
+              })();
+            }
+          }
+        } catch (e) {
+          console.warn("AuthContext: error handling user:status:updated", e);
         }
       });
       socket.on("disconnect", () =>

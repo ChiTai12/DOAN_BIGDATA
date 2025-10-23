@@ -89,7 +89,7 @@ router.get("/", requireAdmin, async (req, res) => {
     const q = `
       MATCH (reporter:User)-[:REPORTED]->(rep:Report)-[:ON_POST]->(p:Post)
       OPTIONAL MATCH (author:User)-[:POSTED]->(p)
-      RETURN rep { .id, .reason, .createdAt }, reporter { id: reporter.id, username: reporter.username }, p { id: p.id, content: p.content, imageUrl: p.imageUrl }, author { id: author.id, username: author.username }
+  RETURN rep { .id, .reason, .createdAt }, reporter { id: reporter.id, username: reporter.username, displayName: reporter.displayName }, p { id: p.id, content: p.content, imageUrl: p.imageUrl }, author { id: author.id, username: author.username, displayName: author.displayName }
       ORDER BY rep.createdAt DESC
       LIMIT 500
     `;
@@ -108,9 +108,21 @@ router.get("/", requireAdmin, async (req, res) => {
             ? rep.createdAt.toNumber()
             : rep.createdAt
           : null,
-        reporter: reporter || null,
+        reporter: reporter
+          ? {
+              id: reporter.id,
+              username: reporter.username,
+              displayName: reporter.displayName || reporter.username,
+            }
+          : null,
         post: post || null,
-        author: author || null,
+        author: author
+          ? {
+              id: author.id,
+              username: author.username,
+              displayName: author.displayName || author.username,
+            }
+          : null,
       };
     });
     return res.json(reports);

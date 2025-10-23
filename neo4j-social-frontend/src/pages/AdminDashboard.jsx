@@ -27,6 +27,7 @@ import { SOCKET_URL } from "../config.js";
 import AdminDashboardMenu from "./AdminDashboardMenu";
 import AdminPosts from "./AdminPosts";
 import AdminReports from "./AdminReports";
+import AdminUsers from "./AdminUsers";
 
 const StatCard = ({ colorClass, title, value, icon }) => (
   <div className={`p-6 rounded-lg ${colorClass} text-white shadow-sm w-full`}>
@@ -395,6 +396,9 @@ export default function AdminDashboard() {
             {typeof window !== "undefined" &&
             window.location.pathname === "/admin/posts" ? (
               <AdminPosts />
+            ) : typeof window !== "undefined" &&
+              window.location.pathname === "/admin/users" ? (
+              <AdminUsers />
             ) : typeof window !== "undefined" &&
               window.location.pathname === "/admin/reports" ? (
               <AdminReports />

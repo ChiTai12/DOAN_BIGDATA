@@ -46,6 +46,7 @@ router.post("/register", async (req, res) => {
           fullName:$fullName,
           avatarUrl:'',
           bio:'',
+          status:$status,
           createdAt: timestamp()
         })
         RETURN u
@@ -57,6 +58,7 @@ router.post("/register", async (req, res) => {
           password,
           displayName: finalDisplayName,
           fullName: finalFullName,
+          status: "active",
         }
       );
 
@@ -69,6 +71,7 @@ router.post("/register", async (req, res) => {
         displayName: finalDisplayName,
         fullName: finalFullName,
         avatarUrl: "",
+        status: "active",
       };
 
       // Emit real-time event so other clients can update suggestions immediately
@@ -160,6 +163,14 @@ router.post("/login", async (req, res) => {
     // Plaintext password comparison (kept for compatibility with current DB)
     if (password !== user.password) {
       return res.status(401).json({ error: "Wrong password" });
+    }
+
+    // Check account status
+    if (user.status && String(user.status).toLowerCase() !== "active") {
+      console.warn(
+        `Auth: login attempt for non-active user=${user.id} status=${user.status}`
+      );
+      return res.status(403).json({ error: "Account is not active" });
     }
 
     const token = jwt.sign({ userId: user.id, role }, process.env.JWT_SECRET, {
