@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import Swal from "sweetalert2";
 import { useAuth } from "./AuthContext";
 import api from "../services/api";
 import feelings from "../data/feelings";
@@ -84,13 +85,27 @@ function CreatePost({ onPostCreated }) {
       setImage(null);
       setImagePreview(null);
       setSelectedIcon(null);
+      // Always show SweetAlert2 success toast for clarity
+      try {
+        Swal.fire({
+          icon: "success",
+          title: "Đã tạo bài viết!",
+          timer: 1400,
+          showConfirmButton: false,
+        });
+      } catch (e) {}
       onPostCreated?.();
     } catch (error) {
       console.error("Error creating post:", error);
       try {
         if (window.appToast)
           window.appToast("Không thể tạo bài viết. Vui lòng thử lại.");
-        else alert("Failed to create post");
+        else
+          Swal.fire({
+            icon: "error",
+            title: "Thất bại",
+            text: "Không thể tạo bài viết. Vui lòng thử lại.",
+          });
       } catch (e) {}
     } finally {
       setLoading(false);

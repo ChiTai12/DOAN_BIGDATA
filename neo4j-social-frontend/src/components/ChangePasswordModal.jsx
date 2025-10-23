@@ -43,10 +43,17 @@ function ChangePasswordModal({ onClose }) {
         newPassword: formData.newPassword,
       });
 
-      setSuccess("Đổi mật khẩu thành công!");
-      setTimeout(() => {
-        onClose();
-      }, 2000);
+      try {
+        const Swal = (await import("sweetalert2")).default;
+        await Swal.fire({
+          icon: "success",
+          title: "Đã đổi mật khẩu!",
+          showConfirmButton: false,
+          timer: 1200,
+          customClass: { title: "text-xl font-semibold" },
+        });
+      } catch (e) {}
+      onClose();
     } catch (error) {
       setError(error.response?.data?.error || "Failed to change password");
     } finally {

@@ -1,4 +1,5 @@
 import React, { useState, useContext, useEffect, useRef } from "react";
+import Swal from "sweetalert2";
 import { useAuth } from "./AuthContext";
 import api from "../services/api";
 import feelings from "../data/feelings";
@@ -876,25 +877,38 @@ function PostCard({ post, author, onDelete }) {
   }, []);
 
   const handleDelete = async () => {
-    if (!window.confirm("Bạn có chắc muốn xóa bài viết này?")) return;
-
-    setIsDeleting(true);
     try {
-      await api.delete(`/posts/delete/${post.id}`);
+      const result = await Swal.fire({
+        title: "Bạn có chắc muốn xóa bài viết này?",
+        icon: "warning",
+        showCancelButton: true,
+        confirmButtonText: "Xóa",
+        cancelButtonText: "Hủy",
+      });
+      if (!result.isConfirmed) return;
+
+      setIsDeleting(true);
       try {
-        if (window.appToast) window.appToast("✅ Đã xóa bài viết thành công!");
-        else alert("✅ Đã xóa bài viết thành công!");
-      } catch (e) {}
-      onDelete?.(post.id); // Callback để refresh feed
-    } catch (error) {
-      console.error("❌ Lỗi xóa bài viết:", error);
-      try {
-        if (window.appToast)
-          window.appToast("❌ Không thể xóa bài viết. Vui lòng thử lại!");
-        else alert("❌ Không thể xóa bài viết. Vui lòng thử lại!");
-      } catch (e) {}
-    } finally {
-      setIsDeleting(false);
+        await api.delete(`/posts/delete/${post.id}`);
+        // Do not show a success toast for deletes (silent removal)
+        onDelete?.(post.id); // Callback để refresh feed
+      } catch (error) {
+        console.error("❌ Lỗi xóa bài viết:", error);
+        try {
+          if (window.appToast)
+            window.appToast("❌ Không thể xóa bài viết. Vui lòng thử lại!");
+          else
+            Swal.fire({
+              icon: "error",
+              title: "Xóa thất bại",
+              text: "Không thể xóa bài viết. Vui lòng thử lại!",
+            });
+        } catch (e) {}
+      } finally {
+        setIsDeleting(false);
+      }
+    } catch (err) {
+      console.error("Delete flow failed", err);
     }
   };
 
@@ -1109,18 +1123,43 @@ function PostCard({ post, author, onDelete }) {
                   (user && user.id) === post.authorId ||
                   (user && user.id) === post.author?.id
                 ) {
-                  alert("Bạn không thể báo cáo bài của chính mình");
+                  Swal.fire({
+                    icon: "info",
+                    title: "Không thể báo cáo",
+                    text: "Bạn không thể báo cáo bài của chính mình",
+                  });
                   return;
                 }
-                const ok = confirm("Bạn có muốn báo cáo bài viết này không?");
-                if (!ok) return;
-                const reason = prompt("Lý do báo cáo (tùy chọn):", "");
+                const { isConfirmed } = await Swal.fire({
+                  title: "Bạn có muốn báo cáo bài viết này không?",
+                  icon: "warning",
+                  showCancelButton: true,
+                  confirmButtonText: "Báo cáo",
+                  cancelButtonText: "Hủy",
+                });
+                if (!isConfirmed) return;
+                const { value: reason } = await Swal.fire({
+                  title: "Lý do báo cáo (tùy chọn)",
+                  input: "text",
+                  inputPlaceholder: "Lý do...",
+                  showCancelButton: true,
+                });
+                if (reason === null) return; // user cancelled input
                 const reports = await import("../services/reportsApi");
                 await reports.createReport({ postId: post.id, reason });
-                alert("Cảm ơn, bài viết đã được báo cáo.");
+                Swal.fire({
+                  icon: "success",
+                  title: "Đã báo cáo",
+                  timer: 1200,
+                  showConfirmButton: false,
+                });
               } catch (e) {
                 console.error("Report failed", e);
-                alert(e?.response?.data?.error || "Báo cáo thất bại");
+                Swal.fire({
+                  icon: "error",
+                  title: "Báo cáo thất bại",
+                  text: e?.response?.data?.error || "Báo cáo thất bại",
+                });
               }
             }}
           >

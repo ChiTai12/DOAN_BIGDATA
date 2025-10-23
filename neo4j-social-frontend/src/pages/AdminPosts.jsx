@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
+import Swal from "sweetalert2";
 import { fetchAdminPosts, hideAdminPost } from "../services/adminApi";
 import ioClient from "socket.io-client";
 import { SOCKET_URL } from "../config.js";
@@ -181,13 +182,46 @@ export default function AdminPosts() {
   // do not expose any admin delete UI or call the admin delete API.
 
   const onHide = async (id) => {
-    if (!confirm("Ẩn/hiện toggling bài viết?")) return;
+    const ok = await Swal.fire({
+      title: "Ẩn/hiện bài viết?",
+      showCancelButton: true,
+      confirmButtonText: "Có",
+      cancelButtonText: "Không",
+    });
+    if (!ok.isConfirmed) return;
     try {
-      await hideAdminPost(id);
+      const res = await hideAdminPost(id);
       // reload
       await load();
+      try {
+        // If API returned new visibility state, show appropriate message
+        const isHidden = res && (res.data?.hidden ?? res.hidden ?? null);
+        if (typeof isHidden === "boolean") {
+          Swal.fire({
+            position: "top-end",
+            toast: true,
+            showConfirmButton: false,
+            timer: 1400,
+            icon: "success",
+            title: isHidden ? "Đã ẩn bài viết" : "Đã bỏ ẩn bài viết",
+          });
+        } else {
+          Swal.fire({
+            position: "top-end",
+            toast: true,
+            showConfirmButton: false,
+            timer: 1400,
+            icon: "success",
+            title: "Thao tác thành công",
+          });
+        }
+      } catch (e) {}
     } catch (e) {
-      alert("Thao tác thất bại");
+      Swal.fire({
+        icon: "error",
+        title: "Thất bại",
+        text: "Thao tác thất bại",
+      });
     }
   };
 

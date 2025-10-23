@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import ioClient from "socket.io-client";
 import { SOCKET_URL } from "../config";
 import { fetchAdminReports, updateReportStatus } from "../services/adminApi";
+import Swal from "sweetalert2";
 
 export default function AdminReports() {
   const [reports, setReports] = useState([]);
@@ -16,12 +17,36 @@ export default function AdminReports() {
     setLoading(true);
     setError(null);
     try {
-      const params = {};
       const qVal = typeof query !== "undefined" ? query : q;
-      if (qVal && String(qVal).trim().length > 0)
-        params.q = String(qVal).trim();
-      const res = await fetchAdminReports(params);
-      setReports(res.data || []);
+
+      // Always fetch the full list from the admin API then apply client-side filtering
+      const res = await fetchAdminReports();
+      const items = res.data || [];
+
+      if (qVal && String(qVal).trim().length > 0) {
+        const term = String(qVal).toLowerCase().trim();
+        const filtered = items.filter((it) => {
+          const id = String(it.id || "").toLowerCase();
+          const reporterUsername =
+            (it.reporter && (it.reporter.username || it.reporter.id)) || "";
+          const reporter = String(reporterUsername).toLowerCase();
+          const author = String(
+            (it.author &&
+              (it.author.displayName || it.author.username || it.author.id)) ||
+              ""
+          ).toLowerCase();
+          const reason = String(it.reason || "").toLowerCase();
+          return (
+            id.includes(term) ||
+            reporter.includes(term) ||
+            author.includes(term) ||
+            reason.includes(term)
+          );
+        });
+        setReports(filtered);
+      } else {
+        setReports(items);
+      }
     } catch (err) {
       console.error("fetchAdminReports error", err);
       setError(err);
@@ -184,14 +209,12 @@ export default function AdminReports() {
               {reports.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50">
                   <td className="px-6 py-5 text-lg text-slate-700">
-                    <span
+                    <div
                       title={r.id}
-                      className="font-mono text-base text-slate-700"
+                      className="max-w-[200px] overflow-hidden whitespace-nowrap truncate font-mono text-base text-slate-700"
                     >
-                      {typeof r.id === "string" && r.id.length > 14
-                        ? `${r.id.slice(0, 8)}...${r.id.slice(-4)}`
-                        : r.id}
-                    </span>
+                      {r.id}
+                    </div>
                   </td>
                   <td className="px-6 py-5 text-lg">
                     {r.reporter?.username || r.reporter?.id}
@@ -270,14 +293,38 @@ export default function AdminReports() {
                             top={dropdownPos.top}
                             width={Math.max(140, dropdownPos.width)}
                             onChoose={async (s) => {
+                              let prev;
                               try {
                                 setOpenFor(null);
-                                const prev = r.status;
+                                prev = r.status;
                                 r.status = s;
                                 setReports((sarr) => [...sarr]);
                                 await updateReportStatus(r.id, s);
+                                // show large centered SweetAlert2 modal with Vietnamese text
+                                const labelMap = {
+                                  pending: "Đang chờ duyệt",
+                                  reviewed: "Đã xét duyệt",
+                                  ignored: "Bỏ qua",
+                                };
+                                const title = `${labelMap[s] || s}`;
+                                try {
+                                  Swal.fire({
+                                    icon: "success",
+                                    title: title,
+                                    showConfirmButton: false,
+                                    timer: 1400,
+                                    width: 520,
+                                    padding: "2.5rem",
+                                    // make the title visually larger
+                                    customClass: {
+                                      title: "text-2xl font-extrabold",
+                                      popup: "rounded-md",
+                                    },
+                                  });
+                                } catch (e) {}
                               } catch (e) {
                                 console.error("update status failed", e);
+                                // rollback
                                 setReports((sarr) =>
                                   sarr.map((it) =>
                                     it.id === r.id
@@ -285,6 +332,13 @@ export default function AdminReports() {
                                       : it
                                   )
                                 );
+                                try {
+                                  Swal.fire({
+                                    icon: "error",
+                                    title: "Cập nhật thất bại",
+                                    text: "Không thể cập nhật trạng thái báo cáo.",
+                                  });
+                                } catch (e) {}
                               }
                             }}
                             onClose={() => setOpenFor(null)}

@@ -102,8 +102,8 @@ export default function AdminUsers() {
                       setFilterName(e.target.value);
                       setCurrentPage(1);
                     }}
-                    placeholder="Tìm theo tên"
-                    aria-label="Tìm theo tên"
+                    placeholder="Tìm theo tên hoặc mã"
+                    aria-label="Tìm theo tên hoặc mã"
                     className="pl-11 pr-3 h-10 w-96 border border-gray-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-200"
                   />
                 </div>
@@ -119,6 +119,22 @@ export default function AdminUsers() {
                     : sortDirection === "desc"
                     ? "▼"
                     : ""}
+                </button>
+                <button
+                  onClick={async () => {
+                    // clear search and reload list
+                    setFilterName("");
+                    setCurrentPage(1);
+                    try {
+                      await awaitReload();
+                    } catch (e) {
+                      console.error("Failed to reload users after clear", e);
+                    }
+                  }}
+                  title="Xóa bộ lọc"
+                  className="ml-2 px-3 h-10 flex items-center justify-center text-sm border bg-white rounded-md hover:bg-gray-50"
+                >
+                  Xóa
                 </button>
               </div>
               <div className="text-sm text-gray-500">Tổng: {users.length}</div>
@@ -153,7 +169,10 @@ export default function AdminUsers() {
                         const name = String(
                           u.displayName || u.username || ""
                         ).toLowerCase();
-                        return name.indexOf(term) !== -1;
+                        const id = String(u.id || "").toLowerCase();
+                        return (
+                          name.indexOf(term) !== -1 || id.indexOf(term) !== -1
+                        );
                       });
                     }
                     if (sortDirection === "asc" || sortDirection === "desc") {
@@ -225,6 +244,22 @@ export default function AdminUsers() {
                               );
                               try {
                                 await updateUserStatus(u.id, newStatus);
+                                try {
+                                  // show success toast
+                                  import("sweetalert2").then((Swal) =>
+                                    Swal.default.fire({
+                                      position: "top-end",
+                                      toast: true,
+                                      showConfirmButton: false,
+                                      timer: 1400,
+                                      icon: "success",
+                                      title:
+                                        newStatus === "locked"
+                                          ? "Đã chặn thành công"
+                                          : "Mở khóa thành công",
+                                    })
+                                  );
+                                } catch (e) {}
                               } catch (err) {
                                 console.error(
                                   "Failed to update user status",
@@ -238,12 +273,17 @@ export default function AdminUsers() {
                                       : x
                                   )
                                 );
-                                alert(
-                                  (err &&
-                                    err.response &&
-                                    err.response.data &&
-                                    err.response.data.error) ||
-                                    "Cập nhật trạng thái thất bại"
+                                import("sweetalert2").then((Swal) =>
+                                  Swal.default.fire({
+                                    icon: "error",
+                                    title: "Cập nhật thất bại",
+                                    text:
+                                      (err &&
+                                        err.response &&
+                                        err.response.data &&
+                                        err.response.data.error) ||
+                                      "Cập nhật trạng thái thất bại",
+                                  })
                                 );
                               }
                             }}

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { createPortal } from "react-dom";
 import api from "../services/api";
+import Swal from "sweetalert2";
 import feelings from "../data/feelings";
 import emojiRegex from "emoji-regex";
 
@@ -270,6 +271,15 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
         })
       );
 
+      try {
+        Swal.fire({
+          icon: "success",
+          title: "Đã cập nhật bài viết!",
+          timer: 1400,
+          showConfirmButton: false,
+        });
+      } catch (e) {}
+
       onPostUpdated?.();
       onClose();
     } catch (error) {
@@ -277,7 +287,13 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
       const serverMsg =
         error?.response?.data?.error || error?.response?.data?.message;
       try {
-        alert(serverMsg || error.message || "Lỗi khi cập nhật bài viết!");
+        import("sweetalert2").then((Swal) =>
+          Swal.default.fire({
+            icon: "error",
+            title: "Lỗi",
+            text: serverMsg || error.message || "Lỗi khi cập nhật bài viết!",
+          })
+        );
       } catch (e) {}
     } finally {
       setLoading(false);

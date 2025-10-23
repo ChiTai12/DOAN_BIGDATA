@@ -8,6 +8,9 @@ export default function ChatSidebar({ onSelect }) {
   const [loading, setLoading] = useState(true);
   const [suggestions, setSuggestions] = useState([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [page, setPage] = useState(1);
+  const LIMIT = 20; // number of users per page for suggestions
+  const [hasMore, setHasMore] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,42 +79,76 @@ export default function ChatSidebar({ onSelect }) {
     return () => window.removeEventListener("app:user:updated", onUserUpdated);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const fetchSuggestions = async () => {
-      console.log("🔍 Loading user suggestions...");
-      setLoadingSuggestions(true);
+  // Fetch suggestions with pagination. Reset to page 1 when user/threads change.
+  const fetchSuggestionsPage = async (pageToLoad = 1) => {
+    console.log("🔍 Loading user suggestions page", pageToLoad);
+    setLoadingSuggestions(true);
+    try {
+      const res = await api.get(
+        `/users/suggestions?page=${pageToLoad}&limit=${LIMIT}`
+      );
+      console.log("📊 Suggestions response (page):", res.data);
+      let list = Array.isArray(res.data) ? res.data : [];
 
-      try {
-        const res = await api.get("/users/suggestions");
-        console.log("📊 Suggestions response:", res.data);
-        if (!cancelled) {
-          const list = Array.isArray(res.data) ? res.data : [];
-
-          // Remove current user from suggestions
-          const filtered = list.filter((s) => {
-            if (!s) return false;
-            if (user?.id && s.id && s.id === user.id) return false;
-            if (user?.username && s.username && s.username === user.username)
-              return false;
-            return true;
-          });
-
-          setSuggestions(filtered);
+      // If server returned fewer than LIMIT on first page, the backend may not
+      // support pagination properly — try a fallback to fetch all users once.
+      if (pageToLoad === 1 && list.length > 0 && list.length < LIMIT) {
+        try {
+          const allRes = await api.get(`/users`);
+          if (Array.isArray(allRes.data) && allRes.data.length > list.length) {
+            console.log("📥 Fallback: loaded full /users list", allRes.data.length);
+            list = allRes.data;
+          }
+        } catch (err) {
+          // fallback failed, keep using paged list
+          console.warn("Fallback /users fetch failed, keeping paged results", err);
         }
-      } catch (err) {
-        console.error("❌ Failed to load suggestions:", err);
-      } finally {
-        if (!cancelled) setLoadingSuggestions(false);
       }
-    };
 
-    if (user && !loading) {
-      fetchSuggestions();
+      // Remove current user from suggestions
+      const filtered = list.filter((s) => {
+        if (!s) return false;
+        if (user?.id && s.id && s.id === user.id) return false;
+        if (user?.username && s.username && s.username === user.username)
+          return false;
+        return true;
+      });
+
+      setSuggestions((prev) => {
+        // avoid duplicates when appending
+        if (pageToLoad === 1) return filtered;
+        const existingKeys = new Set(prev.map((p) => p?.id || p?.username));
+        const toAdd = filtered.filter((s) => {
+          const key = s?.id || s?.username;
+          if (!key) return false;
+          return !existingKeys.has(key);
+        });
+        return [...prev, ...toAdd];
+      });
+
+      setHasMore(list.length === LIMIT);
+      setPage(pageToLoad);
+    } catch (err) {
+      console.error("❌ Failed to load suggestions:", err);
+    } finally {
+      setLoadingSuggestions(false);
     }
+  };
 
-    return () => (cancelled = true);
+  useEffect(() => {
+    if (user && !loading) {
+      // reset and load first page
+      setSuggestions([]);
+      setPage(1);
+      fetchSuggestionsPage(1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, threads.length, loading, updateTrigger]);
+
+  const loadMoreSuggestions = () => {
+    if (!hasMore || loadingSuggestions) return;
+    fetchSuggestionsPage(page + 1);
+  };
 
   if (!user) {
     console.log("❌ No user - showing login prompt");
@@ -263,6 +300,18 @@ export default function ChatSidebar({ onSelect }) {
                     </button>
                   ));
                 })()}
+                {/* Load more button if there are more pages */}
+                {hasMore && (
+                  <div className="flex justify-center mt-2">
+                    <button
+                      onClick={loadMoreSuggestions}
+                      disabled={loadingSuggestions}
+                      className="px-4 py-2 text-sm rounded bg-gray-100 hover:bg-gray-200"
+                    >
+                      {loadingSuggestions ? "Đang tải..." : "Xem thêm"}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

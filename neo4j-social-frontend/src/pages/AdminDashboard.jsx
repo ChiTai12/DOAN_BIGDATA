@@ -365,23 +365,7 @@ export default function AdminDashboard() {
                     <span className="text-sm">Báo cáo phản hồi</span>
                   </li>
 
-                  <li className="flex items-center gap-4 px-4 py-3 rounded-lg hover:bg-blue-700/60">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-6 w-6 opacity-90"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M11.049 2.927c.3-1.14 1.603-1.14 1.902 0a1.724 1.724 0 002.573 1.02c.952-.66 2.273.3 1.903 1.44-.3 1.14-.3 2.338 0 3.478.37 1.14-.951 2.1-1.902 1.44a1.724 1.724 0 00-2.573 1.02c-.299 1.14-1.602 1.14-1.902 0a1.724 1.724 0 00-2.573-1.02c-.951.66-2.273-.3-1.903-1.44.3-1.14.3-2.338 0-3.478-.37-1.14.951-2.1 1.902-1.44.86.6 1.974.06 2.573-1.02z"
-                      />
-                    </svg>
-                    <span className="text-sm">Cài Đặt Cấu Hình</span>
-                  </li>
+                  {/* 'Cài Đặt Cấu Hình' removed per request */}
                 </ul>
               </nav>
             </div>

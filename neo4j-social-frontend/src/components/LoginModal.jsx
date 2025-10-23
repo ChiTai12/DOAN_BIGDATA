@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import Swal from "sweetalert2";
 import { useAuth } from "./AuthContext";
 import api from "../services/api";
 import miniSocial from "../../../mini-social.png";
@@ -40,9 +41,11 @@ function LoginModal({ onClose }) {
           try {
             localStorage.removeItem("token");
           } catch (e) {}
-          alert(
-            "Login succeeded but server did not return a token. Please try again or contact support."
-          );
+          Swal.fire({
+            icon: "warning",
+            title: "Đăng nhập không hoàn tất",
+            text: "Server không trả token. Vui lòng thử lại hoặc liên hệ hỗ trợ.",
+          });
         }
         // If we have a token, do a sanity check: decode payload and ensure it
         // refers to the same user object returned by the server. This prevents
@@ -70,9 +73,11 @@ function LoginModal({ onClose }) {
                 try {
                   localStorage.removeItem("token");
                 } catch (e) {}
-                alert(
-                  "Login failed: token does not match user information. Please contact support."
-                );
+                Swal.fire({
+                  icon: "error",
+                  title: "Đăng nhập thất bại",
+                  text: "Token không khớp. Vui lòng liên hệ hỗ trợ.",
+                });
                 setLoading(false);
                 return;
               }
@@ -89,12 +94,20 @@ function LoginModal({ onClose }) {
         onClose();
       } else {
         await api.post("/auth/register", formData);
-        alert("Account created! Please login.");
+        Swal.fire({
+          icon: "success",
+          title: "Tạo tài khoản",
+          text: "Tài khoản đã tạo. Vui lòng đăng nhập.",
+        });
         setIsLogin(true);
       }
     } catch (error) {
       console.error("Auth error:", error);
-      alert(error.response?.data?.error || "Authentication failed");
+      Swal.fire({
+        icon: "error",
+        title: "Lỗi xác thực",
+        text: error.response?.data?.error || "Authentication failed",
+      });
     } finally {
       setLoading(false);
     }
@@ -224,7 +237,13 @@ function LoginModal({ onClose }) {
           <div className="mt-6 max-w-md mx-auto grid grid-cols-2 gap-4">
             <button
               type="button"
-              onClick={() => alert("Google sign-in placeholder")}
+              onClick={() =>
+                Swal.fire({
+                  icon: "info",
+                  title: "Google sign-in",
+                  text: "Google sign-in placeholder",
+                })
+              }
               className="w-full flex items-center justify-center gap-3 border border-gray-200 rounded-lg py-3 hover:shadow-sm text-sm auth-btn--wide"
             >
               <img
@@ -236,7 +255,13 @@ function LoginModal({ onClose }) {
             </button>
             <button
               type="button"
-              onClick={() => alert("Facebook sign-in placeholder")}
+              onClick={() =>
+                Swal.fire({
+                  icon: "info",
+                  title: "Facebook sign-in",
+                  text: "Facebook sign-in placeholder",
+                })
+              }
               className="w-full flex items-center justify-center gap-3 border border-gray-200 rounded-lg py-3 hover:shadow-sm text-sm auth-btn--wide"
             >
               <img

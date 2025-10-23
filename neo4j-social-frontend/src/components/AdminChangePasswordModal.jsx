@@ -35,8 +35,17 @@ function AdminChangePasswordModal({ onClose }) {
         currentPassword: formData.currentPassword,
         newPassword: formData.newPassword,
       });
-      setSuccess("Đổi mật khẩu thành công!");
-      setTimeout(() => onClose(), 1500);
+      try {
+        const Swal = (await import("sweetalert2")).default;
+        await Swal.fire({
+          icon: "success",
+          title: "Đã đổi mật khẩu!",
+          showConfirmButton: false,
+          timer: 1200,
+          customClass: { title: "text-xl font-semibold" },
+        });
+      } catch (e) {}
+      onClose();
     } catch (err) {
       setError(err.response?.data?.error || "Đổi mật khẩu thất bại");
     } finally {

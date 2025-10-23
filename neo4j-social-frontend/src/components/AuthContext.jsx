@@ -31,7 +31,45 @@ export function AuthProvider({ children }) {
     // if we have a cached user in localStorage, set it immediately so UI stays logged in
     try {
       const rawUser = localStorage.getItem("user");
-      if (rawUser) setUser(JSON.parse(rawUser));
+      if (rawUser) {
+        try {
+          const parsed = JSON.parse(rawUser);
+          // If the cached user is not active (e.g. locked), immediately clear local auth
+          // and force a logout so a stale locked session can't be used.
+          if (parsed && parsed.status && String(parsed.status) !== "active") {
+            try {
+              import("sweetalert2").then((Swal) =>
+                Swal.default.fire({
+                  icon: "warning",
+                  title: "Tài khoản bị khóa",
+                  text: "Tài khoản đã bị khóa. Bạn sẽ được đăng xuất.",
+                  confirmButtonText: "Đồng ý",
+                })
+              );
+            } catch (e) {}
+            try {
+              setUser(null);
+              setToken(null);
+            } catch (e) {}
+            try {
+              localStorage.removeItem("token");
+              localStorage.removeItem("user");
+            } catch (e) {}
+            try {
+              window.location.pathname = "/login";
+            } catch (e) {}
+            // stop further restore attempts
+            setIsLoading(false);
+            return;
+          }
+        } catch (e) {
+          // parsing error, fall back to ignoring the cached user
+        }
+        // only set user if not a locked (or invalid) cached entry
+        try {
+          setUser(JSON.parse(rawUser));
+        } catch (e) {}
+      }
     } catch (e) {
       // ignore parse errors
     }
@@ -45,6 +83,36 @@ export function AuthProvider({ children }) {
           const userPayload = res.data?.user ?? res.data;
           console.log("AuthContext: /users/me response", res.data);
           if (userPayload) {
+            // If the server reports this account is not active, force logout
+            if (userPayload.status && String(userPayload.status) !== "active") {
+              try {
+                import("sweetalert2").then((Swal) =>
+                  Swal.default.fire({
+                    icon: "warning",
+                    title: "Tài khoản bị khóa",
+                    text: "Tài khoản của bạn đã bị khóa. Bạn sẽ được đăng xuất.",
+                    confirmButtonText: "Đồng ý",
+                  })
+                );
+              } catch (e) {}
+              try {
+                setUser(null);
+                setToken(null);
+              } catch (e) {}
+              try {
+                localStorage.removeItem("token");
+                localStorage.removeItem("user");
+                localStorage.setItem(
+                  "auth_force_logout",
+                  Date.now().toString()
+                );
+              } catch (e) {}
+              try {
+                window.location.pathname = "/login";
+              } catch (e) {}
+              setIsLoading(false);
+              return;
+            }
             setUser(userPayload);
             try {
               localStorage.setItem("user", JSON.stringify(userPayload));
@@ -189,9 +257,14 @@ export function AuthProvider({ children }) {
             );
             if (String(status) !== "active") {
               try {
-                // inform the user and clear session
-                alert(
-                  "Tài khoản của bạn đã bị khóa bởi quản trị viên. Bạn sẽ được đăng xuất."
+                // inform the user and clear session (use Swal for nicer modal)
+                import("sweetalert2").then((Swal) =>
+                  Swal.default.fire({
+                    icon: "warning",
+                    title: "Tài khoản bị khóa",
+                    text: "Tài khoản của bạn đã bị khóa bởi quản trị viên. Bạn sẽ được đăng xuất.",
+                    confirmButtonText: "Đồng ý",
+                  })
                 );
               } catch (e) {}
               try {
@@ -257,6 +330,32 @@ export function AuthProvider({ children }) {
     });
     setUser(userData);
     setToken(authToken);
+    // If the account is not active, do not persist it locally and force logout.
+    if (userData && userData.status && String(userData.status) !== "active") {
+      try {
+        import("sweetalert2").then((Swal) =>
+          Swal.default.fire({
+            icon: "warning",
+            title: "Tài khoản bị khóa",
+            text: "Tài khoản của bạn hiện đang bị khóa. Không thể đăng nhập.",
+            confirmButtonText: "Đồng ý",
+          })
+        );
+      } catch (e) {}
+      try {
+        setUser(null);
+        setToken(null);
+      } catch (e) {}
+      try {
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        localStorage.setItem("auth_force_logout", Date.now().toString());
+      } catch (e) {}
+      try {
+        window.location.pathname = "/login";
+      } catch (e) {}
+      return;
+    }
     try {
       const existingToken = localStorage.getItem("token");
       const existingUserRaw = localStorage.getItem("user");
@@ -302,8 +401,24 @@ export function AuthProvider({ children }) {
       }
 
       if (userData) {
-        localStorage.setItem("user", JSON.stringify(userData));
-        console.log("AuthContext.login: user written to localStorage");
+        try {
+          if (userData.status && String(userData.status) !== "active") {
+            // don't persist non-active users
+            console.warn(
+              "AuthContext.login: refusing to persist non-active user to localStorage"
+            );
+            try {
+              localStorage.removeItem("token");
+              localStorage.removeItem("user");
+              localStorage.setItem("auth_force_logout", Date.now().toString());
+            } catch (e) {}
+          } else {
+            localStorage.setItem("user", JSON.stringify(userData));
+            console.log("AuthContext.login: user written to localStorage");
+          }
+        } catch (e) {
+          console.warn("AuthContext.login: failed while persisting user", e);
+        }
       }
     } catch (e) {
       console.warn(
@@ -350,6 +465,25 @@ export function AuthProvider({ children }) {
   const updateUserAndPersist = (userData) => {
     updateUserOnly(userData);
     try {
+      // If status is non-active, clear local storage and force logout instead
+      if (userData && userData.status && String(userData.status) !== "active") {
+        console.warn(
+          "AuthContext: detected non-active status in updateUserAndPersist, clearing auth"
+        );
+        try {
+          localStorage.removeItem("token");
+          localStorage.removeItem("user");
+          localStorage.setItem("auth_force_logout", Date.now().toString());
+        } catch (e) {}
+        try {
+          setUser(null);
+          setToken(null);
+        } catch (e) {}
+        try {
+          window.location.pathname = "/login";
+        } catch (e) {}
+        return;
+      }
       localStorage.setItem("user", JSON.stringify(userData));
       console.log("AuthContext: persisted updated user to localStorage");
     } catch (e) {

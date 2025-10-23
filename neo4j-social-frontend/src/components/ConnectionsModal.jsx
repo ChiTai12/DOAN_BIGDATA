@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import api from "../services/api";
 import { useAuth } from "./AuthContext";
+import Swal from "sweetalert2";
 
 // Modern React Icons
 function UserPlusIcon({ className = "w-4 h-4" }) {
@@ -177,10 +178,44 @@ export default function ConnectionsModal({ isOpen, onClose }) {
 
   const handleToggleFollow = async (targetId, isFollowing) => {
     try {
-      if (isFollowing) await api.delete(`/users/follow/${targetId}`);
-      else await api.post(`/users/follow/${targetId}`);
-      // refresh both lists from the server
-      await loadConnections();
+      if (isFollowing) {
+        // confirm unfollow
+        const c = await Swal.fire({
+          title: "Hủy theo dõi?",
+          text: "Bạn có chắc muốn hủy theo dõi người này?",
+          icon: "warning",
+          showCancelButton: true,
+          confirmButtonText: "Hủy theo dõi",
+          cancelButtonText: "Hủy",
+        });
+        if (!c.isConfirmed) return;
+        await api.delete(`/users/follow/${targetId}`);
+        await loadConnections();
+        try {
+          Swal.fire({
+            position: "top-end",
+            toast: true,
+            showConfirmButton: false,
+            timer: 1400,
+            icon: "success",
+            title: "Đã hủy theo dõi",
+          });
+        } catch (e) {}
+      } else {
+        await api.post(`/users/follow/${targetId}`);
+        await loadConnections();
+        try {
+          Swal.fire({
+            position: "top-end",
+            toast: true,
+            showConfirmButton: false,
+            timer: 1400,
+            icon: "success",
+            title: "Đã theo dõi",
+          });
+        } catch (e) {}
+      }
+
       // dispatch a local event so other UI in the same tab updates immediately
       try {
         const payload = { followerId: user?.id, followingId: targetId };
@@ -191,6 +226,13 @@ export default function ConnectionsModal({ isOpen, onClose }) {
       }
     } catch (e) {
       console.error("Follow toggle failed", e);
+      try {
+        Swal.fire({
+          icon: "error",
+          title: "Lỗi",
+          text: "Không thể thay đổi trạng thái theo dõi.",
+        });
+      } catch (e) {}
     }
   };
 
@@ -278,6 +320,17 @@ function FollowRow({ profile, isFollowing, isFollower, onToggle }) {
   const handleRemoveFollower = async () => {
     if (!profile || !profile.id) return;
     try {
+      const c = await Swal.fire({
+        title: "Loại bỏ người theo dõi?",
+        text: `Bạn có chắc muốn loại bỏ ${
+          profile.displayName || profile.username
+        } khỏi danh sách người theo dõi?`,
+        icon: "warning",
+        showCancelButton: true,
+        confirmButtonText: "Loại bỏ",
+        cancelButtonText: "Hủy",
+      });
+      if (!c.isConfirmed) return;
       await api.delete(`/users/remove-follower/${profile.id}`);
       // dispatch local event to refresh UI immediately
       window.dispatchEvent(
@@ -285,8 +338,25 @@ function FollowRow({ profile, isFollowing, isFollower, onToggle }) {
           detail: { followerId: profile.id, followingId: user?.id },
         })
       );
+      try {
+        Swal.fire({
+          position: "top-end",
+          toast: true,
+          showConfirmButton: false,
+          timer: 1400,
+          icon: "success",
+          title: "Đã loại bỏ",
+        });
+      } catch (e) {}
     } catch (e) {
       console.error("Failed to remove follower", e);
+      try {
+        Swal.fire({
+          icon: "error",
+          title: "Lỗi",
+          text: "Không thể loại bỏ người theo dõi.",
+        });
+      } catch (e) {}
     }
   };
 

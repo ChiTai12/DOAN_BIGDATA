@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useAuth } from "./AuthContext";
+import Swal from "sweetalert2";
 import api from "../services/api";
 
 const SidebarComponent = ({ onToggleAdmin }) => {
@@ -172,6 +173,21 @@ const SidebarComponent = ({ onToggleAdmin }) => {
       following: Array.from(following),
     });
 
+    // If the user is not currently following, confirm before following
+    if (!isFollowing) {
+      try {
+        const c = await Swal.fire({
+          title: "Bạn muốn theo dõi?",
+          text: "Bạn có muốn theo dõi người này?",
+          icon: "question",
+          showCancelButton: true,
+          confirmButtonText: "Theo dõi",
+          cancelButtonText: "Hủy",
+        });
+        if (!c.isConfirmed) return;
+      } catch (e) {}
+    }
+
     // optimistic update
     setFollowing((prev) => {
       const s = new Set(prev);
@@ -189,6 +205,17 @@ const SidebarComponent = ({ onToggleAdmin }) => {
       } else {
         await api.post(`/users/follow/${normalizedUserId}`);
       }
+      try {
+        // Always show SweetAlert2 toast for follow/unfollow
+        Swal.fire({
+          position: "top-end",
+          toast: true,
+          showConfirmButton: false,
+          timer: 1400,
+          icon: "success",
+          title: isFollowing ? "Đã hủy theo dõi" : "Đã theo dõi",
+        });
+      } catch (e) {}
       // dispatch local event so other components in the same tab update immediately
       try {
         const payload = { followerId: user?.id, followingId: normalizedUserId };
@@ -209,6 +236,13 @@ const SidebarComponent = ({ onToggleAdmin }) => {
         }
         return s;
       });
+      try {
+        Swal.fire({
+          icon: "error",
+          title: "Lỗi",
+          text: "Không thể thay đổi trạng thái theo dõi.",
+        });
+      } catch (e) {}
     }
   };
 

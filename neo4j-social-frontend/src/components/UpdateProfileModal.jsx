@@ -100,15 +100,21 @@ function UpdateProfileModal({ onClose }) {
         console.warn("Failed to dispatch app:notification:new", e);
       }
 
-      // Thêm thông báo thành công (non-blocking)
+      // Show a centered SweetAlert2 success modal similar to the design
       try {
-        // Show a concise success notification without the new name
-        if (window.appToast) window.appToast("CẬP NHẬT HỒ SƠ THÀNH CÔNG !");
-        else alert("CẬP NHẬT HỒ SƠ THÀNH CÔNG !");
+        const Swal = (await import("sweetalert2")).default;
+        await Swal.fire({
+          icon: "success",
+          title: "Đã cập nhật hồ sơ!",
+          showConfirmButton: false,
+          timer: 1200,
+          // large visual style
+          customClass: {
+            title: "text-2xl font-bold",
+          },
+        });
       } catch (e) {
-        try {
-          alert(`Cập nhật thành công! Tên mới: ${newUserData.displayName}`);
-        } catch (er) {}
+        // fallback: no-op
       }
       onClose();
 
