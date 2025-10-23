@@ -38,10 +38,27 @@ function Header() {
   const markReadInFlightRef = useRef(false);
   // ids that were viewed locally (user opened dropdown or clicked item)
   const viewedLocallyRef = useRef(new Set());
-  // signatures (logical keys) of notifications viewed locally — used to
-  // prevent the same logical notification (different ids) from reappearing
-  // when the server or socket later emits it.
-  const viewedSignaturesRef = useRef(new Set());
+  // signatures (logical keys) of notifications viewed locally with timestamp
+  // We store a map signature -> ms timestamp and only treat signatures as
+  // suppressed for a short window to avoid permanent hiding.
+  const viewedSignaturesRef = useRef(new Map());
+  const VIEWED_SIGNATURE_TTL = 30 * 1000; // 30 seconds
+  const markSignatureViewed = (sig) => {
+    try {
+      if (!sig) return;
+      viewedSignaturesRef.current.set(sig, Date.now());
+    } catch (e) {}
+  };
+  const signatureViewedRecently = (sig) => {
+    try {
+      if (!sig) return false;
+      const t = viewedSignaturesRef.current.get(sig);
+      if (!t) return false;
+      return Date.now() - t < VIEWED_SIGNATURE_TTL;
+    } catch (e) {
+      return false;
+    }
+  };
   // timestamp of last mark-read (ms) to avoid repeated sequential calls
   const lastMarkReadAtRef = useRef(0);
   // Helper to remove duplicates by id while preserving order (first occurrence wins)
@@ -96,6 +113,64 @@ function Header() {
     return Array.from(map.values());
   };
 
+  // rate-limited rehydrate from server to avoid transient UI gaps
+  const lastRehydrateAtRef = useRef(0);
+  const rehydrateNotifications = async () => {
+    try {
+      const now = Date.now();
+      if (now - lastRehydrateAtRef.current < 2000) return; // 2s cooldown
+      lastRehydrateAtRef.current = now;
+      const token = ctxToken || localStorage.getItem("token");
+      const res = await fetch("http://localhost:5000/notifications", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!Array.isArray(data)) return;
+      const normalized = data
+        .map((n) => {
+          const { ts, timeString } =
+            n.timestamp || n.timeString
+              ? {
+                  ts: n.timestamp == null ? null : Number(n.timestamp),
+                  timeString: n.timeString || null,
+                }
+              : normalizeTimestamp(n.createdAt);
+          const wasViewedLocally =
+            viewedLocallyRef.current.has(String(n.id)) ||
+            signatureViewedRecently(notifSignature(n));
+          return {
+            id: n.id,
+            type: n.type,
+            message: n.message,
+            from: n.fromName || n.from || "Someone",
+            fromUserId: n.fromUserId,
+            postId: n.postId,
+            commentId: n.commentId || null,
+            threadId: n.threadId || null,
+            commentText: n.commentText || null,
+            timestamp: ts || null,
+            timeString: timeString || null,
+            read: wasViewedLocally ? true : n.read === true,
+          };
+        })
+        .sort((a, b) => {
+          if (a.timestamp == null && b.timestamp == null) return 0;
+          if (a.timestamp == null) return 1;
+          if (b.timestamp == null) return -1;
+          return Number(b.timestamp) - Number(a.timestamp);
+        });
+      const filtered = normalized.filter(
+        (n) => !signatureViewedRecently(notifSignature(n))
+      );
+      setNotifications(uniqueById(dedupeBySignature(filtered)));
+      const unread = normalized.filter((n) => !n.read).length;
+      setNotifCount(unread);
+    } catch (e) {
+      console.warn("rehydrateNotifications failed", e);
+    }
+  };
+
   // Mark a single notification as read when user clicks it
   const handleNotificationItemClick = async (notif) => {
     if (!notif) return;
@@ -128,7 +203,7 @@ function Header() {
     try {
       viewedLocallyRef.current.add(String(notif.id));
       try {
-        viewedSignaturesRef.current.add(notifSignature(notif));
+        markSignatureViewed(notifSignature(notif));
       } catch (e) {}
     } catch (e) {}
     setNotifCount((c) => Math.max(0, c - 1));
@@ -315,9 +390,9 @@ function Header() {
             commentId: payload.commentId,
             commentText: payload.commentText,
           });
-          if (viewedSignaturesRef.current.has(payloadSig)) {
+          if (signatureViewedRecently(payloadSig)) {
             console.debug(
-              "Skipping socket notification because signature was viewed locally",
+              "Skipping socket notification because signature was viewed recently",
               payloadSig
             );
             return;
@@ -399,6 +474,12 @@ function Header() {
         } catch (e) {
           console.warn("Failed to forward post:likes:update", e);
         }
+        // if this likes update corresponds to an unlike, rehydrate notifications
+        try {
+          if (payload && payload.postId && payload.liked === false) {
+            rehydrateNotifications();
+          }
+        } catch (e) {}
       });
 
       // forward follow/unfollow events so other UI can react in real-time
@@ -566,6 +647,17 @@ function Header() {
             if (removedUnread > 0)
               setNotifCount((c) => Math.max(0, c - removedUnread));
 
+            // If server didn't provide explicit notifIds (broad removal), rehydrate
+            if (
+              !payload ||
+              !Array.isArray(payload.notifIds) ||
+              payload.notifIds.length === 0
+            ) {
+              try {
+                rehydrateNotifications();
+              } catch (e) {}
+            }
+
             return uniqueById(newList);
           });
         } catch (e) {
@@ -631,10 +723,10 @@ function Header() {
                     timeString: n.timeString || null,
                   }
                 : normalizeTimestamp(n.createdAt);
-            // if this id or logical signature was viewed locally, preserve read=true locally
+            // if this id or logical signature was viewed locally recently, preserve read=true locally
             const wasViewedLocally =
               viewedLocallyRef.current.has(String(n.id)) ||
-              viewedSignaturesRef.current.has(notifSignature(n));
+              signatureViewedRecently(notifSignature(n));
             return {
               id: n.id,
               type: n.type,
@@ -658,9 +750,9 @@ function Header() {
           });
 
         // Merge server list with local realtime list, preferring server data for authoritative fields
-        // remove any normalized items that have been viewed logically
+        // remove any normalized items that have been viewed logically recently
         const filtered = normalized.filter(
-          (n) => !viewedSignaturesRef.current.has(notifSignature(n))
+          (n) => !signatureViewedRecently(notifSignature(n))
         );
         setNotifications((prev) =>
           uniqueById(dedupeBySignature([...filtered, ...(prev || [])]))
@@ -770,9 +862,9 @@ function Header() {
             });
 
           // Filter out any normalized items whose logical signature was
-          // already viewed locally so they don't reappear briefly.
+          // already viewed locally recently so they don't reappear briefly.
           const filtered = normalized.filter(
-            (n) => !viewedSignaturesRef.current.has(notifSignature(n))
+            (n) => !signatureViewedRecently(notifSignature(n))
           );
           setNotifications(uniqueById(dedupeBySignature(filtered)));
 
