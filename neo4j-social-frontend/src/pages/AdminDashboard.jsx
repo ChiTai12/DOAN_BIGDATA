@@ -129,10 +129,43 @@ export default function AdminDashboard() {
       // console.log("[AdminDashboard] Nhận sự kiện stats:update, fetch lại số liệu");
       fetchStats();
     });
+    // Also refresh when follow/unfollow events are emitted by the server
+    socket.on("user:follow", () => {
+      fetchStats();
+    });
+    socket.on("user:unfollow", () => {
+      fetchStats();
+    });
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
+  }, []);
+
+  // Listen for window-level CustomEvents forwarded by Header (socket events)
+  // so AdminDashboard refreshes stats when related activity occurs elsewhere in the app
+  React.useEffect(() => {
+    const onAppEvent = (e) => {
+      // lightweight: simply re-fetch stats when relevant events occur
+      try {
+        fetchStats();
+      } catch (err) {
+        console.warn("Failed to fetch stats on app event", err);
+      }
+    };
+
+    const events = [
+      "app:post:created",
+      "app:post:updated",
+      "app:post:deleted",
+      "app:user:follow",
+      "app:user:unfollow",
+      "app:notification:new",
+      "app:message:new",
+    ];
+
+    events.forEach((ev) => window.addEventListener(ev, onAppEvent));
+    return () => events.forEach((ev) => window.removeEventListener(ev, onAppEvent));
   }, []);
   const { logout, user } = useAuth();
   const [stats, setStats] = useState({

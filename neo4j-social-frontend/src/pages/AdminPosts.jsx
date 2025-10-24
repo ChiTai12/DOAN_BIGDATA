@@ -12,11 +12,78 @@ export default function AdminPosts() {
   const [error, setError] = useState(null);
   const [selectedPost, setSelectedPost] = useState(null);
   const selectedPostRef = useRef(null);
+  const allPostsRef = useRef([]);
+  const [alerts, setAlerts] = useState([]);
+  const alertIdRef = useRef(1);
+  const alertsRef = useRef([]);
+
+  // Persist alerts in localStorage so they survive reloads
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("adminPostsAlerts");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAlerts(parsed);
+          // restore id counter to avoid collisions
+          const maxId = parsed.reduce(
+            (m, it) => (it.id && it.id > m ? it.id : m),
+            0
+          );
+          alertIdRef.current = maxId + 1;
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to load adminPostsAlerts from localStorage", e);
+    }
+  }, []);
+
+  // save alerts whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem("adminPostsAlerts", JSON.stringify(alerts || []));
+    } catch (e) {
+      console.warn("Failed to save adminPostsAlerts", e);
+    }
+  }, [alerts]);
 
   // keep ref in sync with state so socket handlers can read latest value
   useEffect(() => {
     selectedPostRef.current = selectedPost;
   }, [selectedPost]);
+
+  // keep a ref for the full posts list so realtime handlers can inspect current visibility
+  useEffect(() => {
+    allPostsRef.current = allPosts;
+  }, [allPosts]);
+
+  // helper to add or update a persistent alert (merge by postId to avoid duplicates)
+  const addAlert = (title, text, postId = null) => {
+    const now = Date.now();
+    setAlerts((prev) => {
+      if (postId) {
+        const idx = prev.findIndex(
+          (it) => it.postId && String(it.postId) === String(postId)
+        );
+        if (idx !== -1) {
+          const copy = [...prev];
+          copy[idx] = { ...copy[idx], title, text, ts: now };
+          return copy;
+        }
+      }
+      const id = alertIdRef.current++;
+      return [{ id, postId, title, text, ts: now }, ...prev];
+    });
+  };
+
+  const removeAlert = (id) => {
+    setAlerts((s) => s.filter((a) => a.id !== id));
+  };
+
+  // keep alertsRef in sync for dedupe checks inside socket handlers
+  useEffect(() => {
+    alertsRef.current = alerts;
+  }, [alerts]);
 
   const openModal = (post) => setSelectedPost(post);
   const closeModal = () => setSelectedPost(null);
@@ -137,6 +204,47 @@ export default function AdminPosts() {
             const post = extractPost(payload);
             if (cur && post && String(post.id) === String(cur.id)) {
               setSelectedPost((prev) => ({ ...(prev || {}), ...post }));
+            }
+          } catch (e) {}
+          // If the updated post exists in our current list and is hidden, show a small toast
+          try {
+            const post = extractPost(payload);
+            const local =
+              post && post.id
+                ? allPostsRef.current.find(
+                    (it) => String(it.id) === String(post.id)
+                  )
+                : null;
+            if (local && local.hidden) {
+              const fullId = (local.id || "").toString();
+              // show transient toast
+              Swal.fire({
+                position: "top-end",
+                toast: true,
+                icon: "info",
+                title: "Có bài ẩn đã được cập nhật",
+                text: `${fullId}${
+                  local.authorName ? ` — ${local.authorName}` : ""
+                }`,
+                showConfirmButton: false,
+                timer: 3500,
+              });
+              // Persist after toast finishes to avoid overlapping duplicate visuals.
+              // Also skip if an alert for this postId already exists.
+              try {
+                setTimeout(() => {
+                  // delegate update-or-insert to addAlert which merges by postId
+                  addAlert(
+                    "Có bài ẩn đã được cập nhật",
+                    `${fullId}${
+                      local.authorName ? ` — ${local.authorName}` : ""
+                    }`,
+                    fullId
+                  );
+                }, 3600);
+              } catch (e) {
+                // ignore scheduling errors
+              }
             }
           } catch (e) {}
           load();
@@ -274,6 +382,33 @@ export default function AdminPosts() {
 
       {loading && <div>Đang tải...</div>}
       {error && <div className="text-red-600">{error}</div>}
+
+      {/* Persistent admin alerts (dismissible) */}
+      <div className="fixed top-16 right-6 z-50 w-80">
+        {alerts.map((a) => (
+          <div
+            key={a.id}
+            className="mb-3 bg-white border border-slate-200 rounded shadow-sm p-3 flex justify-between items-start"
+          >
+            <div>
+              <div className="font-semibold text-sm">{a.title}</div>
+              <div className="text-xs text-gray-600 mt-1">{a.text}</div>
+              <div className="text-xxs text-gray-400 mt-1">
+                {new Date(a.ts).toLocaleString()}
+              </div>
+            </div>
+            <div>
+              <button
+                onClick={() => removeAlert(a.id)}
+                className="ml-3 text-gray-400 hover:text-gray-700"
+                aria-label="Dismiss alert"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
 
       <div className="bg-white rounded shadow p-4 overflow-hidden border border-slate-300">
         <table className="w-full table-fixed text-left">

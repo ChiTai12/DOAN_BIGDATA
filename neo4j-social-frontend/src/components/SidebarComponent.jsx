@@ -10,6 +10,8 @@ const SidebarComponent = ({ onToggleAdmin }) => {
   const [error, setError] = useState(null);
   const [following, setFollowing] = useState(new Set());
   const [hovered, setHovered] = useState(null);
+  const DISPLAY_LIMIT = 9; // number of suggestions to show by default
+  const [showAll, setShowAll] = useState(false);
   // fetch suggestions (exposed so events can trigger refresh)
   const fetchSuggestions = async (signal) => {
     setLoading(true);
@@ -322,85 +324,111 @@ const SidebarComponent = ({ onToggleAdmin }) => {
               </div>
             ) : (
               // Only show suggestions that the user is NOT already following
-              suggestions
-                .filter((s) => {
+              (() => {
+                const filtered = suggestions.filter((s) => {
                   const key = s.id || s.username;
                   return !following.has(key);
-                })
-                .map((suggestion) => (
-                  <div
-                    key={suggestion.id || suggestion.username}
-                    className="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-lg transition-colors"
-                  >
-                    <div className="relative w-12 h-12">
-                      {suggestion?.avatarUrl ? (
-                        <>
-                          <img
-                            src={`http://localhost:5000${suggestion.avatarUrl}`}
-                            alt={suggestion.displayName || suggestion.username}
-                            className="w-12 h-12 rounded-full object-cover shadow-avatar"
-                            onError={(e) => {
-                              try {
-                                e.target.style.display = "none";
-                                // show fallback div
-                                const fallback = e.target.nextElementSibling;
-                                if (fallback) fallback.style.display = "flex";
-                              } catch (err) {}
-                            }}
-                          />
-                          <div
-                            className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold shadow-avatar absolute top-0 left-0"
-                            style={{ display: "none" }}
-                          >
-                            {(
-                              suggestion.displayName?.[0] ||
-                              suggestion.username?.[0] ||
-                              "U"
-                            ).toUpperCase()}
-                          </div>
-                        </>
-                      ) : (
-                        <div className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold shadow-avatar">
-                          {(
-                            suggestion.displayName?.[0] ||
-                            suggestion.username?.[0] ||
-                            "U"
-                          ).toUpperCase()}
+                });
+                const visible = showAll
+                  ? filtered
+                  : filtered.slice(0, DISPLAY_LIMIT);
+                return (
+                  <>
+                    {visible.map((suggestion) => (
+                      <div
+                        key={suggestion.id || suggestion.username}
+                        className="flex items-center gap-4 p-2 hover:bg-gray-50 rounded-lg transition-colors"
+                      >
+                        <div className="relative w-12 h-12">
+                          {suggestion?.avatarUrl ? (
+                            <>
+                              <img
+                                src={`http://localhost:5000${suggestion.avatarUrl}`}
+                                alt={
+                                  suggestion.displayName || suggestion.username
+                                }
+                                className="w-12 h-12 rounded-full object-cover shadow-avatar"
+                                onError={(e) => {
+                                  try {
+                                    e.target.style.display = "none";
+                                    // show fallback div
+                                    const fallback =
+                                      e.target.nextElementSibling;
+                                    if (fallback)
+                                      fallback.style.display = "flex";
+                                  } catch (err) {}
+                                }}
+                              />
+                              <div
+                                className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold shadow-avatar absolute top-0 left-0"
+                                style={{ display: "none" }}
+                              >
+                                {(
+                                  suggestion.displayName?.[0] ||
+                                  suggestion.username?.[0] ||
+                                  "U"
+                                ).toUpperCase()}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="w-12 h-12 bg-gradient-to-r from-blue-400 to-purple-400 rounded-full flex items-center justify-center text-white font-bold shadow-avatar">
+                              {(
+                                suggestion.displayName?.[0] ||
+                                suggestion.username?.[0] ||
+                                "U"
+                              ).toUpperCase()}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-gray-900 truncate">
-                        {suggestion.displayName || suggestion.username}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-gray-900 truncate">
+                            {suggestion.displayName || suggestion.username}
+                          </div>
+                          <div className="text-sm text-gray-500 truncate">
+                            @{suggestion.username}
+                          </div>
+                        </div>
+                        {(() => {
+                          const key = String(
+                            suggestion.id || suggestion.username
+                          );
+                          const isFollowing = following.has(String(key));
+                          return (
+                            <button
+                              onClick={() => handleFollow(key)}
+                              onMouseEnter={() => setHovered(key)}
+                              onMouseLeave={() => setHovered(null)}
+                              className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ease-in-out transform min-w-[100px] ${
+                                isFollowing
+                                  ? "bg-gray-200 text-gray-800 hover:bg-red-500 hover:text-white hover:scale-105"
+                                  : "bg-blue-500 text-white hover:bg-blue-600"
+                              }`}
+                            >
+                              {isFollowing
+                                ? hovered === key
+                                  ? "Bỏ theo dõi"
+                                  : "Đang theo dõi"
+                                : "Theo dõi"}
+                            </button>
+                          );
+                        })()}
                       </div>
-                      <div className="text-sm text-gray-500 truncate">
-                        @{suggestion.username}
-                      </div>
-                    </div>
-                    {(() => {
-                      const key = String(suggestion.id || suggestion.username);
-                      const isFollowing = following.has(String(key));
-                      return (
+                    ))}
+                    {filtered.length > DISPLAY_LIMIT && (
+                      <div className="pt-2">
                         <button
-                          onClick={() => handleFollow(key)}
-                          onMouseEnter={() => setHovered(key)}
-                          onMouseLeave={() => setHovered(null)}
-                          className={`flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ease-in-out transform min-w-[100px] ${
-                            isFollowing
-                              ? "bg-gray-200 text-gray-800 hover:bg-red-500 hover:text-white hover:scale-105"
-                              : "bg-blue-500 text-white hover:bg-blue-600"
-                          }`}
+                          onClick={() => setShowAll((s) => !s)}
+                          className="w-full text-center text-sm text-blue-600 hover:underline"
                         >
-                          {isFollowing
-                            ? hovered === key
-                              ? "Bỏ theo dõi"
-                              : "Đang theo dõi"
-                            : "Theo dõi"}
+                          {showAll
+                            ? "Thu gọn"
+                            : `Xem thêm (${filtered.length - DISPLAY_LIMIT})`}
                         </button>
-                      );
-                    })()}
-                  </div>
-                ))
+                      </div>
+                    )}
+                  </>
+                );
+              })()
             )}
           </div>
         )}
