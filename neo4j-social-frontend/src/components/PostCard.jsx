@@ -1171,7 +1171,8 @@ function PostCard({ post, author, onDelete }) {
               stroke="currentColor"
               strokeWidth="2"
             >
-              <path d="M4 21v-13l6 4 6-4 4 3v10H4z" />
+              <path d="M5 3v18" />
+              <path d="M5 6c3-1 6-1 9 0s6 1 6 1v7c0 0-3-1-6-1s-6 1-9 0" />
             </svg>
           </button>
         </div>

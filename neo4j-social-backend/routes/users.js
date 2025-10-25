@@ -52,7 +52,7 @@ router.get("/suggestions", async (req, res) => {
       `
       MATCH (other:User)
       RETURN other
-      LIMIT 10
+      LIMIT 50
       `
     );
 
