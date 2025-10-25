@@ -149,6 +149,31 @@ router.post("/", verifyToken, upload.single("image"), async (req, res) => {
   }
 });
 
+// Dev-only helper: emit a fake post:updated with wasHiddenBeforeUpdate for testing
+// Usage (dev only): POST /posts/debug/emit-admin-alert  with JSON { postId, actorId, actorName }
+router.post("/debug/emit-admin-alert", async (req, res) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.status(403).json({ error: "Not allowed in production" });
+  }
+  try {
+    const { postId, actorId, actorName } = req.body || {};
+    const ioAll = req.app && req.app.locals && req.app.locals.io;
+    const payload = {
+      post: { id: postId || `debug-${Date.now()}` },
+      author: { id: actorId || "debug-actor", displayName: actorName || "Debug Actor" },
+      wasHiddenBeforeUpdate: true,
+    };
+    if (ioAll) {
+      ioAll.emit("post:updated", payload);
+      console.log("🔧 Dev emit post:updated (wasHiddenBeforeUpdate)", payload);
+    }
+    res.json({ ok: true, payload });
+  } catch (e) {
+    console.error("Dev emit failed", e);
+    res.status(500).json({ error: "emit failed" });
+  }
+});
+
 // Lấy bài viết mới nhất
 router.get("/feed", async (req, res) => {
   const session = driver.session();
@@ -507,6 +532,17 @@ router.put(
       const currentPost = authorCheck.records[0].get("p").properties;
       const username = authorCheck.records[0].get("username");
 
+      // Remember whether the post was hidden before this update so clients
+      // (frontends) can decide to treat this update as an "appeal" and
+      // surface admin-local alerts. Do NOT create server-side Notification
+      // nodes for this — we only emit a flag over sockets.
+      const wasHiddenBefore = !!(
+        currentPost &&
+        (currentPost.hidden === true ||
+          currentPost.hidden === "true" ||
+          String(currentPost.visibility || "").toLowerCase() === "hidden")
+      );
+
       // Xử lý ảnh
       let newImageUrl = currentPost.imageUrl || "";
 
@@ -598,6 +634,8 @@ router.put(
               likesCount,
               liked: liked === null ? false : Boolean(liked),
             },
+            // signal to clients that the post was hidden before the update
+            wasHiddenBeforeUpdate: wasHiddenBefore,
           };
 
           const ioAll = req.app.locals.io;

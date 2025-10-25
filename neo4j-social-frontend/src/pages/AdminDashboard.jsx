@@ -25,7 +25,6 @@ import { useAuth } from "../components/AuthContext";
 import ioClient from "socket.io-client";
 import { SOCKET_URL } from "../config.js";
 import AdminDashboardMenu from "./AdminDashboardMenu";
-import { FaUsers } from "react-icons/fa";
 import AdminPosts from "./AdminPosts";
 import AdminReports from "./AdminReports";
 import AdminUsers from "./AdminUsers";
@@ -129,43 +128,10 @@ export default function AdminDashboard() {
       // console.log("[AdminDashboard] Nhận sự kiện stats:update, fetch lại số liệu");
       fetchStats();
     });
-    // Also refresh when follow/unfollow events are emitted by the server
-    socket.on("user:follow", () => {
-      fetchStats();
-    });
-    socket.on("user:unfollow", () => {
-      fetchStats();
-    });
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, []);
-
-  // Listen for window-level CustomEvents forwarded by Header (socket events)
-  // so AdminDashboard refreshes stats when related activity occurs elsewhere in the app
-  React.useEffect(() => {
-    const onAppEvent = (e) => {
-      // lightweight: simply re-fetch stats when relevant events occur
-      try {
-        fetchStats();
-      } catch (err) {
-        console.warn("Failed to fetch stats on app event", err);
-      }
-    };
-
-    const events = [
-      "app:post:created",
-      "app:post:updated",
-      "app:post:deleted",
-      "app:user:follow",
-      "app:user:unfollow",
-      "app:notification:new",
-      "app:message:new",
-    ];
-
-    events.forEach((ev) => window.addEventListener(ev, onAppEvent));
-    return () => events.forEach((ev) => window.removeEventListener(ev, onAppEvent));
   }, []);
   const { logout, user } = useAuth();
   const [stats, setStats] = useState({
@@ -348,7 +314,27 @@ export default function AdminDashboard() {
                         : "hover:bg-blue-700/60")
                     }
                   >
-                    <FaUsers className="h-6 w-6 opacity-90" />
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-6 w-6 opacity-90"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      aria-hidden="true"
+                    >
+                      {/* outer ring */}
+                      <circle cx="12" cy="12" r="9" strokeWidth={1.5} />
+                      {/* head */}
+                      <circle cx="12" cy="9.5" r="2" fill="currentColor" />
+                      {/* body curve */}
+                      <path
+                        d="M7.5 18c0-2.2 2.7-3.5 4.5-3.5s4.5 1.3 4.5 3.5"
+                        strokeWidth={1.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        fill="none"
+                      />
+                    </svg>
                     <span className="text-sm">Quản Lý Người Dùng</span>
                   </li>
 
@@ -422,21 +408,19 @@ export default function AdminDashboard() {
                       <svg
                         xmlns="http://www.w3.org/2000/svg"
                         className="h-8 w-8"
-                        fill="none"
                         viewBox="0 0 24 24"
+                        fill="none"
                         stroke="currentColor"
+                        aria-hidden="true"
                       >
+                        <circle cx="12" cy="12" r="9" strokeWidth={1.5} />
+                        <circle cx="12" cy="9.5" r="2" fill="currentColor" />
                         <path
+                          d="M7.5 18c0-2.2 2.7-3.5 4.5-3.5s4.5 1.3 4.5 3.5"
+                          strokeWidth={1.5}
                           strokeLinecap="round"
                           strokeLinejoin="round"
-                          strokeWidth={1.5}
-                          d="M5.121 17.804A9 9 0 1118.879 6.196 9 9 0 015.12 17.804z"
-                        />
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={1.5}
-                          d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
+                          fill="none"
                         />
                       </svg>
                     }

@@ -52,7 +52,7 @@ router.get("/suggestions", async (req, res) => {
       `
       MATCH (other:User)
       RETURN other
-      LIMIT 50
+      LIMIT 10
       `
     );
 
@@ -467,12 +467,6 @@ router.post("/follow/:userId", requireUser, async (req, res) => {
           followerId: req.userId,
           followingId: req.params.userId,
         });
-        // broadcast stats update so admin dashboards (Hoạt động hàng đầu) refresh
-        try {
-          io.emit("stats:update");
-        } catch (e) {
-          console.warn("Failed to emit stats:update after follow", e);
-        }
       }
     } catch (emitErr) {
       console.warn("Failed to emit follow socket event", emitErr);
@@ -543,12 +537,6 @@ router.delete("/follow/:userId", requireUser, async (req, res) => {
           followerId: req.userId,
           followingId: req.params.userId,
         });
-        // broadcast stats update so admin dashboards (Hoạt động hàng đầu) refresh
-        try {
-          io.emit("stats:update");
-        } catch (e) {
-          console.warn("Failed to emit stats:update after unfollow", e);
-        }
       }
     } catch (emitErr) {
       console.warn("Failed to emit unfollow socket event", emitErr);

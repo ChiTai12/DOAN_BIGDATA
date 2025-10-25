@@ -255,6 +255,11 @@ function EditPostModal({ post, author, isOpen, onClose, onPostUpdated }) {
 
       console.log("✅ Post updated:", response.data);
 
+      // NOTE: admin-local alert persistence was intentionally removed from
+      // the author-facing edit modal. Admin clients should persist alerts
+      // themselves when they receive the server-emitted `post:updated`
+      // payload with `wasHiddenBeforeUpdate: true`.
+
       // Dispatch event for real-time updates
       window.dispatchEvent(
         new CustomEvent("app:post:updated", {

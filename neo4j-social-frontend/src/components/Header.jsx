@@ -16,6 +16,7 @@ import {
 import { FiPlus, FiMessageCircle } from "react-icons/fi";
 import { AiOutlineHome, AiOutlinePlusSquare } from "react-icons/ai";
 import ioClient from "socket.io-client";
+import Swal from "sweetalert2";
 import { SOCKET_URL } from "../config.js";
 
 function Header() {
@@ -38,27 +39,10 @@ function Header() {
   const markReadInFlightRef = useRef(false);
   // ids that were viewed locally (user opened dropdown or clicked item)
   const viewedLocallyRef = useRef(new Set());
-  // signatures (logical keys) of notifications viewed locally with timestamp
-  // We store a map signature -> ms timestamp and only treat signatures as
-  // suppressed for a short window to avoid permanent hiding.
-  const viewedSignaturesRef = useRef(new Map());
-  const VIEWED_SIGNATURE_TTL = 30 * 1000; // 30 seconds
-  const markSignatureViewed = (sig) => {
-    try {
-      if (!sig) return;
-      viewedSignaturesRef.current.set(sig, Date.now());
-    } catch (e) {}
-  };
-  const signatureViewedRecently = (sig) => {
-    try {
-      if (!sig) return false;
-      const t = viewedSignaturesRef.current.get(sig);
-      if (!t) return false;
-      return Date.now() - t < VIEWED_SIGNATURE_TTL;
-    } catch (e) {
-      return false;
-    }
-  };
+  // signatures (logical keys) of notifications viewed locally — used to
+  // prevent the same logical notification (different ids) from reappearing
+  // when the server or socket later emits it.
+  const viewedSignaturesRef = useRef(new Set());
   // timestamp of last mark-read (ms) to avoid repeated sequential calls
   const lastMarkReadAtRef = useRef(0);
   // Helper to remove duplicates by id while preserving order (first occurrence wins)
@@ -115,7 +99,7 @@ function Header() {
 
   // rate-limited rehydrate from server to avoid transient UI gaps
   const lastRehydrateAtRef = useRef(0);
-  const rehydrateNotifications = async () => {
+  const rehydrateNotifications = async (opts = {}) => {
     try {
       const now = Date.now();
       if (now - lastRehydrateAtRef.current < 2000) return; // 2s cooldown
@@ -138,7 +122,7 @@ function Header() {
               : normalizeTimestamp(n.createdAt);
           const wasViewedLocally =
             viewedLocallyRef.current.has(String(n.id)) ||
-            signatureViewedRecently(notifSignature(n));
+            viewedSignaturesRef.current.has(notifSignature(n));
           return {
             id: n.id,
             type: n.type,
@@ -160,9 +144,10 @@ function Header() {
           if (b.timestamp == null) return -1;
           return Number(b.timestamp) - Number(a.timestamp);
         });
-      const filtered = normalized.filter(
-        (n) => !signatureViewedRecently(notifSignature(n))
-      );
+      const filtered = normalized.filter((n) => {
+        if (opts.skipSignatureFilter) return true;
+        return !viewedSignaturesRef.current.has(notifSignature(n));
+      });
       setNotifications(uniqueById(dedupeBySignature(filtered)));
       const unread = normalized.filter((n) => !n.read).length;
       setNotifCount(unread);
@@ -203,7 +188,7 @@ function Header() {
     try {
       viewedLocallyRef.current.add(String(notif.id));
       try {
-        markSignatureViewed(notifSignature(notif));
+        viewedSignaturesRef.current.add(notifSignature(notif));
       } catch (e) {}
     } catch (e) {}
     setNotifCount((c) => Math.max(0, c - 1));
@@ -309,6 +294,8 @@ function Header() {
         } catch (e) {
           console.warn("Failed to forward post:updated", e);
         }
+        // Admin alert persistence moved to the AdminPosts page (admin-only client).
+        // Do not persist admin-local alerts in the general Header (user UI).
       });
       // forward new comments so PostCard can insert them in real-time
       socket.on("post:commented", (payload) => {
@@ -390,9 +377,9 @@ function Header() {
             commentId: payload.commentId,
             commentText: payload.commentText,
           });
-          if (signatureViewedRecently(payloadSig)) {
+          if (viewedSignaturesRef.current.has(payloadSig)) {
             console.debug(
-              "Skipping socket notification because signature was viewed recently",
+              "Skipping socket notification because signature was viewed locally",
               payloadSig
             );
             return;
@@ -477,7 +464,7 @@ function Header() {
         // if this likes update corresponds to an unlike, rehydrate notifications
         try {
           if (payload && payload.postId && payload.liked === false) {
-            rehydrateNotifications();
+            rehydrateNotifications({ skipSignatureFilter: true });
           }
         } catch (e) {}
       });
@@ -608,58 +595,70 @@ function Header() {
       socket.on("notification:remove", (payload) => {
         try {
           console.log("Header received notification:remove", payload);
-          setNotifications((prev) => {
-            if (!payload) return prev;
-            let newList = prev;
-            // If server provided explicit notifIds, only remove those exact ids.
-            // Compare as strings to avoid type mismatches (Neo4j integers etc).
-            if (
-              Array.isArray(payload.notifIds) &&
-              payload.notifIds.length > 0
-            ) {
-              // Server provided explicit notification ids that were deleted.
-              // Remove any local notification whose id matches — do not
-              // try to be too clever on the client-side. The server is
-              // authoritative for which Notification nodes were deleted
-              // (this happens on post delete), so remove them all locally.
-              const idsToRemove = new Set(
-                payload.notifIds.map((i) => String(i))
+          // If server provided explicit notifIds, remove those exact ids locally.
+          if (
+            payload &&
+            Array.isArray(payload.notifIds) &&
+            payload.notifIds.length > 0
+          ) {
+            const idsToRemove = new Set(payload.notifIds.map((i) => String(i)));
+            setNotifications((prev) => {
+              const newList = (prev || []).filter(
+                (n) => !idsToRemove.has(String(n.id))
               );
-              newList = prev.filter((n) => !idsToRemove.has(String(n.id)));
-            } else if (payload.fromUserId && payload.postId && payload.type) {
-              // Fallback: remove only notifications that match the exact triple
-              // (fromUserId, postId, type) to avoid overly-broad removals.
-              newList = prev.filter(
+              const removedUnread = (prev || []).filter(
                 (n) =>
-                  !(
-                    String(n.fromUserId) === String(payload.fromUserId) &&
-                    String(n.postId) === String(payload.postId) &&
-                    n.type === payload.type
-                  )
-              );
-            }
+                  !n.read && !newList.some((m) => String(m.id) === String(n.id))
+              ).length;
+              if (removedUnread > 0)
+                setNotifCount((c) => Math.max(0, c - removedUnread));
+              return uniqueById(newList);
+            });
 
-            // Update badge count by the number of unread notifications that were removed
-            const removedUnread = prev.filter(
-              (n) =>
-                !n.read && !newList.some((m) => String(m.id) === String(n.id))
-            ).length;
-            if (removedUnread > 0)
-              setNotifCount((c) => Math.max(0, c - removedUnread));
+            // Also clear any locally-viewed signatures that correspond to this removal
+            try {
+              const f =
+                payload.fromUserId != null ? String(payload.fromUserId) : "";
+              const p = payload.postId != null ? String(payload.postId) : "";
+              const t =
+                payload.type != null ? String(payload.type).toLowerCase() : "";
+              for (const s of Array.from(viewedSignaturesRef.current)) {
+                if (s.startsWith(`${f}::${p}::${t}::`)) {
+                  viewedSignaturesRef.current.delete(s);
+                }
+              }
+            } catch (e) {}
 
-            // If server didn't provide explicit notifIds (broad removal), rehydrate
-            if (
-              !payload ||
-              !Array.isArray(payload.notifIds) ||
-              payload.notifIds.length === 0
-            ) {
-              try {
-                rehydrateNotifications();
-              } catch (e) {}
-            }
+            return;
+          }
 
-            return uniqueById(newList);
-          });
+          // For broad removals (no notifIds) or other cases, do NOT mutate local list
+          // immediately; instead re-fetch authoritative notifications from DB to
+          // avoid temporary disappearance/flicker.
+          try {
+            // Clear any viewed signature that matches this removal so a recreated
+            // notification (e.g. like -> unlike -> like) will be treated as new.
+            try {
+              const f =
+                payload && payload.fromUserId != null
+                  ? String(payload.fromUserId)
+                  : "";
+              const p =
+                payload && payload.postId != null ? String(payload.postId) : "";
+              const t =
+                payload && payload.type != null
+                  ? String(payload.type).toLowerCase()
+                  : "";
+              for (const s of Array.from(viewedSignaturesRef.current)) {
+                if (s.startsWith(`${f}::${p}::${t}::`)) {
+                  viewedSignaturesRef.current.delete(s);
+                }
+              }
+            } catch (e) {}
+            rehydrateNotifications({ skipSignatureFilter: true });
+          } catch (e) {
+            console.warn("rehydrate failed on notification:remove", e);
+          }
         } catch (e) {
           console.warn("Failed to process notification:remove", e);
         }
@@ -723,10 +722,10 @@ function Header() {
                     timeString: n.timeString || null,
                   }
                 : normalizeTimestamp(n.createdAt);
-            // if this id or logical signature was viewed locally recently, preserve read=true locally
+            // if this id or logical signature was viewed locally, preserve read=true locally
             const wasViewedLocally =
               viewedLocallyRef.current.has(String(n.id)) ||
-              signatureViewedRecently(notifSignature(n));
+              viewedSignaturesRef.current.has(notifSignature(n));
             return {
               id: n.id,
               type: n.type,
@@ -750,9 +749,9 @@ function Header() {
           });
 
         // Merge server list with local realtime list, preferring server data for authoritative fields
-        // remove any normalized items that have been viewed logically recently
+        // remove any normalized items that have been viewed logically
         const filtered = normalized.filter(
-          (n) => !signatureViewedRecently(notifSignature(n))
+          (n) => !viewedSignaturesRef.current.has(notifSignature(n))
         );
         setNotifications((prev) =>
           uniqueById(dedupeBySignature([...filtered, ...(prev || [])]))
@@ -862,9 +861,9 @@ function Header() {
             });
 
           // Filter out any normalized items whose logical signature was
-          // already viewed locally recently so they don't reappear briefly.
+          // already viewed locally so they don't reappear briefly.
           const filtered = normalized.filter(
-            (n) => !signatureViewedRecently(notifSignature(n))
+            (n) => !viewedSignaturesRef.current.has(notifSignature(n))
           );
           setNotifications(uniqueById(dedupeBySignature(filtered)));
 
@@ -897,6 +896,12 @@ function Header() {
     // as read just by opening/closing the dropdown. The small blue dot
     // remains the explicit control for marking a single notification read.
     const willOpen = !showNotifications;
+    // When opening the dropdown, rehydrate from the server so the list is authoritative
+    if (willOpen) {
+      try {
+        rehydrateNotifications({ skipSignatureFilter: true });
+      } catch (e) {}
+    }
     setShowNotifications(willOpen);
     openedByUserRef.current = willOpen;
     // Do not modify notifications, viewedLocally, signatures, or call server.

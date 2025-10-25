@@ -8,82 +8,16 @@ export default function AdminPosts() {
   const [q, setQ] = useState("");
   const [posts, setPosts] = useState([]);
   const [allPosts, setAllPosts] = useState([]);
+  const [adminAlerts, setAdminAlerts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selectedPost, setSelectedPost] = useState(null);
   const selectedPostRef = useRef(null);
-  const allPostsRef = useRef([]);
-  const [alerts, setAlerts] = useState([]);
-  const alertIdRef = useRef(1);
-  const alertsRef = useRef([]);
-
-  // Persist alerts in localStorage so they survive reloads
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("adminPostsAlerts");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setAlerts(parsed);
-          // restore id counter to avoid collisions
-          const maxId = parsed.reduce(
-            (m, it) => (it.id && it.id > m ? it.id : m),
-            0
-          );
-          alertIdRef.current = maxId + 1;
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to load adminPostsAlerts from localStorage", e);
-    }
-  }, []);
-
-  // save alerts whenever they change
-  useEffect(() => {
-    try {
-      localStorage.setItem("adminPostsAlerts", JSON.stringify(alerts || []));
-    } catch (e) {
-      console.warn("Failed to save adminPostsAlerts", e);
-    }
-  }, [alerts]);
 
   // keep ref in sync with state so socket handlers can read latest value
   useEffect(() => {
     selectedPostRef.current = selectedPost;
   }, [selectedPost]);
-
-  // keep a ref for the full posts list so realtime handlers can inspect current visibility
-  useEffect(() => {
-    allPostsRef.current = allPosts;
-  }, [allPosts]);
-
-  // helper to add or update a persistent alert (merge by postId to avoid duplicates)
-  const addAlert = (title, text, postId = null) => {
-    const now = Date.now();
-    setAlerts((prev) => {
-      if (postId) {
-        const idx = prev.findIndex(
-          (it) => it.postId && String(it.postId) === String(postId)
-        );
-        if (idx !== -1) {
-          const copy = [...prev];
-          copy[idx] = { ...copy[idx], title, text, ts: now };
-          return copy;
-        }
-      }
-      const id = alertIdRef.current++;
-      return [{ id, postId, title, text, ts: now }, ...prev];
-    });
-  };
-
-  const removeAlert = (id) => {
-    setAlerts((s) => s.filter((a) => a.id !== id));
-  };
-
-  // keep alertsRef in sync for dedupe checks inside socket handlers
-  useEffect(() => {
-    alertsRef.current = alerts;
-  }, [alerts]);
 
   const openModal = (post) => setSelectedPost(post);
   const closeModal = () => setSelectedPost(null);
@@ -150,6 +84,42 @@ export default function AdminPosts() {
 
   useEffect(() => {
     load();
+    // load admin alerts (persisted in localStorage)
+    const LS_KEY = "adminPostsAlerts";
+    const readAlerts = () => {
+      try {
+        const raw = localStorage.getItem(LS_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        const list = Array.isArray(arr) ? arr : [];
+        // dedupe by postId, keeping the first occurrence (assumed newest at index 0)
+        const seen = new Set();
+        const unique = [];
+        for (const a of list) {
+          try {
+            const pid = a && a.postId ? String(a.postId) : null;
+            if (pid) {
+              if (seen.has(pid)) continue;
+              seen.add(pid);
+            }
+            unique.push(a);
+          } catch (e) {
+            // skip malformed
+          }
+        }
+        return unique;
+      } catch (e) {
+        return [];
+      }
+    };
+    setAdminAlerts(readAlerts());
+    const onAlertsUpdated = (e) => {
+      try {
+        setAdminAlerts(Array.isArray(e.detail) ? e.detail : readAlerts());
+      } catch (err) {
+        setAdminAlerts(readAlerts());
+      }
+    };
+    window.addEventListener("app:admin:alertsUpdated", onAlertsUpdated);
     // Setup realtime updates so admin list refreshes when posts change
     try {
       const token = localStorage.getItem("token");
@@ -205,46 +175,118 @@ export default function AdminPosts() {
             if (cur && post && String(post.id) === String(cur.id)) {
               setSelectedPost((prev) => ({ ...(prev || {}), ...post }));
             }
-          } catch (e) {}
-          // If the updated post exists in our current list and is hidden, show a small toast
-          try {
-            const post = extractPost(payload);
-            const local =
-              post && post.id
-                ? allPostsRef.current.find(
-                    (it) => String(it.id) === String(post.id)
-                  )
-                : null;
-            if (local && local.hidden) {
-              const fullId = (local.id || "").toString();
-              // show transient toast
-              Swal.fire({
-                position: "top-end",
-                toast: true,
-                icon: "info",
-                title: "Có bài ẩn đã được cập nhật",
-                text: `${fullId}${
-                  local.authorName ? ` — ${local.authorName}` : ""
-                }`,
-                showConfirmButton: false,
-                timer: 3500,
-              });
-              // Persist after toast finishes to avoid overlapping duplicate visuals.
-              // Also skip if an alert for this postId already exists.
-              try {
-                setTimeout(() => {
-                  // delegate update-or-insert to addAlert which merges by postId
-                  addAlert(
-                    "Có bài ẩn đã được cập nhật",
-                    `${fullId}${
-                      local.authorName ? ` — ${local.authorName}` : ""
-                    }`,
-                    fullId
+            // If server indicates this post WAS hidden before the update, persist
+            // a lightweight admin alert locally so admin UI shows it. This keeps
+            // admin alerts scoped to admin clients and does NOT create DB
+            // Notification nodes.
+            try {
+              if (payload && payload.wasHiddenBeforeUpdate) {
+                const LS_KEY = "adminPostsAlerts";
+                const readAlerts = () => {
+                  try {
+                    const raw = localStorage.getItem(LS_KEY);
+                    const arr = raw ? JSON.parse(raw) : [];
+                    return Array.isArray(arr) ? arr : [];
+                  } catch (e) {
+                    return [];
+                  }
+                };
+                const curAlerts = readAlerts();
+                const actorName =
+                  payload.updatedByName ||
+                  payload.updaterName ||
+                  (payload.post &&
+                    (payload.post.authorName ||
+                      payload.post.author?.displayName)) ||
+                  payload.authorName ||
+                  "(unknown)";
+                const postId =
+                  payload.postId ||
+                  payload.id ||
+                  (payload.post && payload.post.id) ||
+                  null;
+                const alertObj = {
+                  id: `admin-alert-${Date.now()}-${Math.floor(
+                    Math.random() * 10000
+                  )}`,
+                  postId,
+                  actorId:
+                    payload.updatedBy ||
+                    payload.actorId ||
+                    payload.userId ||
+                    null,
+                  actorName,
+                  time: Date.now(),
+                };
+
+                // Replace existing alert for same postId if present, otherwise insert at front
+                let next;
+                try {
+                  const idx = (curAlerts || []).findIndex(
+                    (a) =>
+                      a &&
+                      a.postId &&
+                      postId &&
+                      String(a.postId) === String(postId)
                   );
-                }, 3600);
-              } catch (e) {
-                // ignore scheduling errors
+                  if (idx !== -1) {
+                    const updated = {
+                      ...curAlerts[idx],
+                      actorId: alertObj.actorId,
+                      actorName: alertObj.actorName,
+                      time: alertObj.time,
+                    };
+                    const filtered = (curAlerts || []).filter(
+                      (_, i) => i !== idx
+                    );
+                    next = [updated].concat(filtered).slice(0, 50);
+                  } else {
+                    next = [alertObj]
+                      .concat(Array.isArray(curAlerts) ? curAlerts : [])
+                      .slice(0, 50);
+                  }
+                } catch (e) {
+                  next = [alertObj]
+                    .concat(Array.isArray(curAlerts) ? curAlerts : [])
+                    .slice(0, 50);
+                }
+
+                try {
+                  localStorage.setItem(LS_KEY, JSON.stringify(next));
+                } catch (e) {}
+                try {
+                  setAdminAlerts(next);
+                } catch (e) {}
+                try {
+                  window.dispatchEvent(
+                    new CustomEvent("app:admin:alertsUpdated", { detail: next })
+                  );
+                } catch (e) {}
+
+                // Show a small toast if admin is not on the Admin Posts page
+                try {
+                  const curPath =
+                    typeof window !== "undefined"
+                      ? window.location.pathname
+                      : "";
+                  if (curPath !== "/admin/posts") {
+                    Swal.fire({
+                      toast: true,
+                      position: "top-end",
+                      showConfirmButton: false,
+                      showCloseButton: true,
+                      timer: 4000,
+                      icon: "info",
+                      title: "Có bài ẩn đã được cập nhật",
+                      text: `${alertObj.postId || "(no id)"} — ${
+                        alertObj.actorName || "(unknown)"
+                      }`,
+                    }).catch(() => {});
+                  }
+                } catch (e) {}
               }
+            } catch (e) {
+              console.warn("admin alert persist failed", e);
             }
           } catch (e) {}
           load();
@@ -278,6 +320,9 @@ export default function AdminPosts() {
     } catch (e) {
       console.warn("AdminPosts: realtime init failed", e);
     }
+    return () => {
+      window.removeEventListener("app:admin:alertsUpdated", onAlertsUpdated);
+    };
   }, []);
 
   const onSearch = async (e) => {
@@ -301,6 +346,7 @@ export default function AdminPosts() {
       const res = await hideAdminPost(id);
       // reload
       await load();
+      // (no admin alert here) — admin hide/unhide action keeps existing toasts but does not create adminPostsAlerts entry
       try {
         // If API returned new visibility state, show appropriate message
         const isHidden = res && (res.data?.hidden ?? res.hidden ?? null);
@@ -339,6 +385,85 @@ export default function AdminPosts() {
         <h2 className="text-4xl font-extrabold uppercase tracking-tight mb-4">
           QUẢN LÝ BÀI VIẾT
         </h2>
+
+        {/* Admin alerts panel (temporary alerts from localStorage) */}
+        {adminAlerts && adminAlerts.length > 0 && (
+          <div className="mb-4">
+            <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3">
+              <div className="text-sm font-semibold text-yellow-800 mb-2">
+                Thông báo quản trị viên
+              </div>
+              <div className="space-y-2">
+                {adminAlerts.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between gap-4 bg-white p-2 rounded"
+                  >
+                    <div className="text-sm text-gray-800 truncate">
+                      <div className="font-medium">
+                        Mã bài: {a.postId || "(không rõ)"}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        Người cập nhật:{" "}
+                        {a.actorName || a.actorId || "(không rõ)"}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="px-3 py-1 bg-blue-500 text-white rounded text-sm"
+                        onClick={async () => {
+                          try {
+                            // filter list to the post id
+                            if (a.postId) {
+                              setQ(String(a.postId));
+                              await load(String(a.postId));
+                              // try to focus into results
+                              setTimeout(
+                                () =>
+                                  window.scrollTo({
+                                    top: 300,
+                                    behavior: "smooth",
+                                  }),
+                                150
+                              );
+                            }
+                          } catch (e) {}
+                        }}
+                      >
+                        Mở
+                      </button>
+                      <button
+                        className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-sm"
+                        onClick={() => {
+                          try {
+                            const LS_KEY = "adminPostsAlerts";
+                            const raw = localStorage.getItem(LS_KEY);
+                            const arr = raw ? JSON.parse(raw) : [];
+                            const next = (arr || []).filter(
+                              (x) => String(x.id) !== String(a.id)
+                            );
+                            localStorage.setItem(LS_KEY, JSON.stringify(next));
+                            setAdminAlerts(next);
+                            // notify other tabs/components
+                            try {
+                              window.dispatchEvent(
+                                new CustomEvent("app:admin:alertsUpdated", {
+                                  detail: next,
+                                })
+                              );
+                            } catch (e) {}
+                          } catch (e) {}
+                        }}
+                      >
+                        X
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={onSearch} className="mb-4 flex gap-2">
           <div className="relative flex-1">
@@ -382,33 +507,6 @@ export default function AdminPosts() {
 
       {loading && <div>Đang tải...</div>}
       {error && <div className="text-red-600">{error}</div>}
-
-      {/* Persistent admin alerts (dismissible) */}
-      <div className="fixed top-16 right-6 z-50 w-80">
-        {alerts.map((a) => (
-          <div
-            key={a.id}
-            className="mb-3 bg-white border border-slate-200 rounded shadow-sm p-3 flex justify-between items-start"
-          >
-            <div>
-              <div className="font-semibold text-sm">{a.title}</div>
-              <div className="text-xs text-gray-600 mt-1">{a.text}</div>
-              <div className="text-xxs text-gray-400 mt-1">
-                {new Date(a.ts).toLocaleString()}
-              </div>
-            </div>
-            <div>
-              <button
-                onClick={() => removeAlert(a.id)}
-                className="ml-3 text-gray-400 hover:text-gray-700"
-                aria-label="Dismiss alert"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
 
       <div className="bg-white rounded shadow p-4 overflow-hidden border border-slate-300">
         <table className="w-full table-fixed text-left">

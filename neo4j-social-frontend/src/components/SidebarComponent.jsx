@@ -10,8 +10,8 @@ const SidebarComponent = ({ onToggleAdmin }) => {
   const [error, setError] = useState(null);
   const [following, setFollowing] = useState(new Set());
   const [hovered, setHovered] = useState(null);
-  const DISPLAY_LIMIT = 9; // number of suggestions to show by default
-  const [showAll, setShowAll] = useState(false);
+  const [showAllSuggestions, setShowAllSuggestions] = useState(false);
+  const SUGGESTION_LIMIT = 9;
   // fetch suggestions (exposed so events can trigger refresh)
   const fetchSuggestions = async (signal) => {
     setLoading(true);
@@ -329,9 +329,9 @@ const SidebarComponent = ({ onToggleAdmin }) => {
                   const key = s.id || s.username;
                   return !following.has(key);
                 });
-                const visible = showAll
+                const visible = showAllSuggestions
                   ? filtered
-                  : filtered.slice(0, DISPLAY_LIMIT);
+                  : filtered.slice(0, SUGGESTION_LIMIT);
                 return (
                   <>
                     {visible.map((suggestion) => (
@@ -414,15 +414,17 @@ const SidebarComponent = ({ onToggleAdmin }) => {
                         })()}
                       </div>
                     ))}
-                    {filtered.length > DISPLAY_LIMIT && (
+                    {filtered.length > SUGGESTION_LIMIT && (
                       <div className="pt-2">
                         <button
-                          onClick={() => setShowAll((s) => !s)}
+                          onClick={() => setShowAllSuggestions((s) => !s)}
                           className="w-full text-center text-sm text-blue-600 hover:underline"
                         >
-                          {showAll
+                          {showAllSuggestions
                             ? "Thu gọn"
-                            : `Xem thêm (${filtered.length - DISPLAY_LIMIT})`}
+                            : `Xem thêm (${
+                                filtered.length - SUGGESTION_LIMIT
+                              })`}
                         </button>
                       </div>
                     )}

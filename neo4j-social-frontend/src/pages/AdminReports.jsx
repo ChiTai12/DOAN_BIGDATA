@@ -35,11 +35,13 @@ export default function AdminReports() {
               (it.author.displayName || it.author.username || it.author.id)) ||
               ""
           ).toLowerCase();
+          const postId = String(it.post?.id || "").toLowerCase();
           const reason = String(it.reason || "").toLowerCase();
           return (
             id.includes(term) ||
             reporter.includes(term) ||
             author.includes(term) ||
+            postId.includes(term) ||
             reason.includes(term)
           );
         });
@@ -191,14 +193,11 @@ export default function AdminReports() {
                 <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Người báo cáo
                 </th>
-                <th className="w-2/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
+                <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Lý do báo cáo
                 </th>
-                <th className="w-0 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
-                  <span className="sr-only">Bài viết bị báo cáo</span>
-                </th>
                 <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
-                  Mã bài viết
+                  MÃ BÀI VIẾT
                 </th>
                 <th className="w-1/6 px-4 py-4 text-left text-base font-extrabold uppercase tracking-wide border-b border-slate-200 whitespace-nowrap">
                   Trạng thái xử lý
@@ -228,14 +227,11 @@ export default function AdminReports() {
                     </div>
                   </td>
                   <td className="px-6 py-5 text-lg">
-                    {/* intentionally leave blank to give more space to 'Lý do báo cáo' */}
-                  </td>
-                  <td className="px-6 py-5 text-lg">
                     <div
-                      title={r.post?.id || r.postId || "(unknown)"}
+                      title={r.post?.id}
                       className="max-w-[200px] overflow-hidden whitespace-nowrap truncate font-mono text-base text-slate-700"
                     >
-                      {r.post?.id || r.postId || "(unknown)"}
+                      {r.post?.id || "(unknown)"}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-base relative">
